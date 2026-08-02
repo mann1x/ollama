@@ -537,12 +537,6 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 
 	var builtinParser parsers.Parser
 	if shouldUseHarmony(m) {
-		// harmony's Reasoning field only understands low/medium/high; map "max" to "high"
-		if req.Think != nil {
-			if s, ok := req.Think.Value.(string); ok && s == "max" {
-				req.Think.Value = "high"
-			}
-		}
 		if m.Config.Parser == "" {
 			m.Config.Parser = "harmony"
 		}
@@ -626,7 +620,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		values.Think = req.Think != nil && req.Think.Bool()
 		values.ThinkLevel = ""
 		if req.Think != nil {
-			values.ThinkLevel = req.Think.String()
+			values.ThinkLevel = req.Think.Level()
 		}
 		values.IsThinkSet = req.Think != nil
 
@@ -726,8 +720,9 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	var thinkTagParser *thinkingparser.Parser
+	var openingTag, closingTag string
 	if builtinParser == nil {
-		openingTag, closingTag := thinkingparser.InferTags(m.Template.Template)
+		openingTag, closingTag = thinkingparser.InferTags(m.Template.Template)
 		if req.Think != nil && req.Think.Bool() && openingTag != "" && closingTag != "" {
 			thinkTagParser = &thinkingparser.Parser{
 				OpeningTag: openingTag,
@@ -738,6 +733,8 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 			}
 		}
 	}
+
+	thinkBudget, thinkStartTag, thinkEndTag := thinkBudgetForCompletion(builtinParser, openingTag, closingTag, req.Think, opts)
 
 	ch := make(chan any)
 	go func() {
@@ -757,17 +754,20 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		}
 
 		if err := r.Completion(ctx, llm.CompletionRequest{
-			Prompt:          prompt,
-			Media:           media,
-			Format:          req.Format,
-			Options:         opts,
-			Shift:           req.Shift == nil || *req.Shift,
-			Truncate:        req.Truncate == nil || *req.Truncate,
-			Logprobs:        req.Logprobs,
-			TopLogprobs:     req.TopLogprobs,
-			PreservedTokens: preservedTokensForCompletion(builtinParser),
-			LeadingBOS:      leadingBOS,
-			ThinkingClose:   thinkingClose,
+			Prompt:           prompt,
+			Media:            media,
+			Format:           req.Format,
+			Options:          opts,
+			Shift:            req.Shift == nil || *req.Shift,
+			Truncate:         req.Truncate == nil || *req.Truncate,
+			Logprobs:         req.Logprobs,
+			TopLogprobs:      req.TopLogprobs,
+			PreservedTokens:  preservedTokensForCompletion(builtinParser),
+			LeadingBOS:       leadingBOS,
+			ThinkingClose:    thinkingClose,
+			ThinkBudget:      thinkBudget,
+			ThinkingStartTag: thinkStartTag,
+			ThinkingEndTag:   thinkEndTag,
 		}, func(cr llm.CompletionResponse) {
 			res := api.GenerateResponse{
 				Model:     req.Model,
@@ -2760,6 +2760,36 @@ func preservedTokensForCompletion(builtinParser parsers.Parser) []string {
 	return nil
 }
 
+// thinkBudgetForCompletion resolves how many tokens a request may spend
+// thinking, together with the delimiters a runner needs to enforce that bound.
+// Models with a built-in parser report their own delimiters; the rest fall back
+// to the ones inferred from the Go template, which is what the generic thinking
+// parser splits on. A think value carrying its own budget wins over the model's
+// think_budget parameter. The budget is zero when thinking is unrestricted or
+// when there is no thinking block to close.
+func thinkBudgetForCompletion(builtinParser parsers.Parser, templateStart, templateEnd string, think *api.ThinkValue, opts *api.Options) (budget int, start, end string) {
+	if opts == nil {
+		return 0, "", ""
+	}
+
+	start, end = parsers.ThinkingTagsForParser(builtinParser)
+	if start == "" || end == "" {
+		start, end = templateStart, templateEnd
+	}
+	if start == "" || end == "" {
+		return 0, "", ""
+	}
+
+	budget = think.BudgetTokens(opts.NumCtx)
+	if budget <= 0 {
+		budget = opts.ThinkBudget.BudgetTokens(opts.NumCtx)
+	}
+	if budget <= 0 {
+		return 0, "", ""
+	}
+	return budget, start, end
+}
+
 func toolCallTagForCompletion(toolParser *tools.Parser) string {
 	if toolParser == nil {
 		return ""
@@ -3148,12 +3178,6 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	msgs = filterThinkTags(msgs, m)
 
 	if shouldUseHarmony(m) {
-		// harmony's Reasoning field only understands low/medium/high; map "max" to "high"
-		if req.Think != nil {
-			if s, ok := req.Think.Value.(string); ok && s == "max" {
-				req.Think.Value = "high"
-			}
-		}
 		if m.Config.Parser == "" {
 			m.Config.Parser = "harmony"
 		}
@@ -3223,6 +3247,8 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		toolParser = tools.NewParser(m.Template.Template, req.Tools)
 	}
 
+	thinkBudget, thinkStartTag, thinkEndTag := thinkBudgetForCompletion(builtinParser, openingTag, closingTag, req.Think, opts)
+
 	ch := make(chan any)
 	go func() {
 		defer close(ch)
@@ -3233,18 +3259,21 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		var parserErr error
 
 		err := r.Completion(ctx, llm.CompletionRequest{
-			Prompt:          prompt,
-			Media:           media,
-			Format:          req.Format,
-			Options:         opts,
-			Shift:           req.Shift == nil || *req.Shift,
-			Truncate:        truncate,
-			Logprobs:        req.Logprobs,
-			TopLogprobs:     req.TopLogprobs,
-			PreservedTokens: preservedTokensForCompletion(builtinParser),
-			ToolCallTag:     toolCallTagForCompletion(toolParser),
-			LeadingBOS:      leadingBOSForModel(m),
-			ThinkingClose:   thinkingCloseForCompletion(builtinParser, thinkTagParser),
+			Prompt:           prompt,
+			Media:            media,
+			Format:           req.Format,
+			Options:          opts,
+			Shift:            req.Shift == nil || *req.Shift,
+			Truncate:         truncate,
+			Logprobs:         req.Logprobs,
+			TopLogprobs:      req.TopLogprobs,
+			PreservedTokens:  preservedTokensForCompletion(builtinParser),
+			ToolCallTag:      toolCallTagForCompletion(toolParser),
+			LeadingBOS:       leadingBOSForModel(m),
+			ThinkingClose:    thinkingCloseForCompletion(builtinParser, thinkTagParser),
+			ThinkBudget:      thinkBudget,
+			ThinkingStartTag: thinkStartTag,
+			ThinkingEndTag:   thinkEndTag,
 		}, func(r llm.CompletionResponse) {
 			res := api.ChatResponse{
 				Model:     req.Model,
