@@ -102,7 +102,9 @@ jobs:
           docker run --rm -v "$PWD:/src" -w /src -e VERSION -e OUT \
             -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
             almalinux:8 bash -euo pipefail -c '
-              dnf install -y -q gcc tar gzip findutils > /dev/null
+              # gcc-c++ is not optional: the final link pulls in -lstdc++ and
+              # plain gcc leaves it out ("cannot find -lstdc++").
+              dnf install -y -q gcc gcc-c++ tar gzip findutils > /dev/null
               ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
               curl -fsSL "https://go.dev/dl/${ver}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
               tar -C /usr/local -xzf /tmp/go.tar.gz
