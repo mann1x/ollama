@@ -5,8 +5,10 @@
 #
 # Deliberately uses no third-party actions — not actions/checkout, not
 # setup-go, not upload-artifact. A fork whose policy is "local_only" blocks
-# those and the run sits queued forever. git, go and gh are all preinstalled
-# on the hosted runners, so the workflow depends on nothing it cannot see.
+# those and the run sits queued forever. git and gh are preinstalled on every
+# hosted runner; go is preinstalled on the Linux and Windows images but not on
+# the arm64 macOS one, so the build job fetches it from go.dev when it is
+# missing rather than depending on anything it cannot see.
 name: thinkbudget test build
 
 on:
@@ -70,6 +72,18 @@ jobs:
     steps:
       - name: clone
         run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      # macos-latest (arm64) ships no Go: "go: command not found". Install the
+      # current release into the runner temp and put it on PATH for the steps
+      # that follow; GOTOOLCHAIN=auto then pulls whatever go.mod asks for.
+      - name: ensure go
+        run: |
+          if command -v go > /dev/null; then go version; exit 0; fi
+          case "$(uname -s)" in Darwin) os=darwin ;; *) os=linux ;; esac
+          case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
+          ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+          curl -fsSL "https://go.dev/dl/${ver}.${os}-${arch}.tar.gz" -o "$RUNNER_TEMP/go.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tar.gz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
       - name: go version
         run: go version
       # -s -w is not optional: an unstripped cgo build produces a PE that
