@@ -268,9 +268,20 @@ func TestWriteWithBackup(t *testing.T) {
 
 // Edge case tests for files.go
 
+// skipIfPrivileged skips permission-based tests when the test binary runs as
+// root. Root bypasses the discretionary access checks these tests rely on, so
+// a chmod'd directory stays writable and the expected failure never happens.
+func skipIfPrivileged(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("permission tests are meaningless as root: DAC checks are bypassed")
+	}
+}
+
 // TestWriteWithBackup_FailsIfBackupFails documents critical behavior: if backup fails, we must not proceed.
 // User could lose their config with no way to recover.
 func TestWriteWithBackup_FailsIfBackupFails(t *testing.T) {
+	skipIfPrivileged(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("permission tests unreliable on Windows")
 	}
@@ -306,6 +317,7 @@ func TestWriteWithBackup_FailsIfBackupFails(t *testing.T) {
 // TestWriteWithBackup_PermissionDenied verifies clear error when target file has wrong permissions.
 // Common issue when config owned by root or wrong perms.
 func TestWriteWithBackup_PermissionDenied(t *testing.T) {
+	skipIfPrivileged(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("permission tests unreliable on Windows")
 	}
@@ -496,6 +508,7 @@ func TestWriteWithBackup_EmptyData(t *testing.T) {
 // TestWriteWithBackup_FileUnreadableButDirWritable verifies behavior when existing file
 // cannot be read (for backup comparison) but directory is writable.
 func TestWriteWithBackup_FileUnreadableButDirWritable(t *testing.T) {
+	skipIfPrivileged(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("permission tests unreliable on Windows")
 	}
