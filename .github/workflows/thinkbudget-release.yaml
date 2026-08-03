@@ -1,0 +1,98 @@
+# Test builds of the thinking-budget branch, for people who want to try it
+# without building Go themselves. Binaries only: the llama.cpp runtime this
+# needs is b10091, which is exactly what stock 0.32.5 already ships, so a
+# tester drops this binary over an existing install and keeps everything else.
+name: thinkbudget test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: branch, tag or SHA to build
+        default: thinkbudget-testing
+        required: true
+      version:
+        description: version string stamped into the binary
+        default: 0.32.5-thinkbudget
+        required: true
+      tag:
+        description: release tag to create
+        default: v0.32.5-thinkbudget
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: ollama-linux-amd64
+            out: ollama
+          - os: windows-latest
+            asset: ollama-windows-amd64.exe
+            out: ollama.exe
+          - os: macos-latest
+            asset: ollama-darwin-arm64
+            out: ollama
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            LLAMA_CPP_VERSION
+      # -s -w is not optional: an unstripped cgo build produces a PE that
+      # Windows refuses to load ("This app can't run on your PC").
+      - name: build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=${{ inputs.version }} -X=github.com/ollama/ollama/server.mode=release" \
+            -o "${{ matrix.out }}" .
+          cp "${{ matrix.out }}" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
+      - name: smoke test
+        shell: bash
+        if: matrix.os != 'macos-latest'
+        run: ./${{ matrix.out }} --version || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: |
+          cd dist && sha256sum * > sha256sum.txt && cat sha256sum.txt
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${{ inputs.tag }}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${{ inputs.tag }}" dist/* \
+            --target "${{ inputs.ref }}" \
+            --title "ollama ${{ inputs.version }} — thinking budget test build" \
+            --prerelease \
+            --notes-file .github/workflows/thinkbudget-release-notes.md
