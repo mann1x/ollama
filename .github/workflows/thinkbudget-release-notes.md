@@ -56,7 +56,8 @@ A client that sends no `think` field still gets the model's own budget, which is
 ## Caveats
 
 - Unsigned, built by GitHub Actions from this fork. Windows SmartScreen will complain.
-- macOS arm64 only; no Intel build.
+- macOS arm64 only; no Intel build. Gatekeeper blocks unsigned downloads — `xattr -d com.apple.quarantine ollama-darwin-arm64` before running it.
+- The Linux binary is built against glibc 2.28, so it runs on RHEL 8, Ubuntu 20.04 and Debian 11 upwards. Verify a download against `sha256sum.txt` before replacing anything.
 - Only models with a thinking block are affected. Everything else is untouched.
 - MLX runners ignore the fields.
 
