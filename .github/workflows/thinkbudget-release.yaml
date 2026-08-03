@@ -86,9 +86,41 @@ jobs:
           echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
       - name: go version
         run: go version
+      # ubuntu-latest is 24.04, so a cgo build there links against glibc 2.39
+      # and the binary will not start on anything older than 2.34 — Ubuntu
+      # 20.04, Debian 11, RHEL 8 all refuse it. Build the linux binary inside
+      # AlmaLinux 8 (glibc 2.28) instead, which is what a tester on an older
+      # distro needs; -ldl is required there because dlopen only moved into
+      # libc proper in 2.34.
+      - name: build (linux, inside almalinux 8)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: repo
+        env:
+          VERSION: ${{ inputs.version }}
+          OUT: ${{ matrix.out }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e VERSION -e OUT \
+            -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
+            almalinux:8 bash -euo pipefail -c '
+              dnf install -y -q gcc tar gzip findutils > /dev/null
+              ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+              curl -fsSL "https://go.dev/dl/${ver}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+              tar -C /usr/local -xzf /tmp/go.tar.gz
+              export PATH=/usr/local/go/bin:$PATH
+              go version
+              go build -trimpath \
+                -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$VERSION -X=github.com/ollama/ollama/server.mode=release" \
+                -o "$OUT" .
+            '
+          sudo chown "$(id -u):$(id -g)" "$OUT"
+          cp "$OUT" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
+          # prove the portability claim rather than assuming it
+          objdump -T "${{ matrix.asset }}" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
       # -s -w is not optional: an unstripped cgo build produces a PE that
       # Windows refuses to load ("This app can't run on your PC").
       - name: build
+        if: matrix.os != 'ubuntu-latest'
         working-directory: repo
         env:
           CGO_ENABLED: "1"
