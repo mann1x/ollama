@@ -2667,18 +2667,6 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	}
 	msgs = filterThinkTags(msgs, m)
 
-	// A budget carried by the model's own think_budget parameter has to reach
-	// the renderer and the parser, which decide whether to prefill an opening
-	// thinking tag: a prefilled tag is one the model never generates, and the
-	// runner's budget sampler only engages when it sees that tag generated.
-	// Both read it off the think value, so resolve the parameter onto it here.
-	// The number is the one thinkBudgetForCompletion resolves below.
-	if req.Think != nil && req.Think.IsBool() && req.Think.Bool() {
-		if budget := opts.ThinkBudget.BudgetTokens(opts.NumCtx); budget > 0 {
-			req.Think = &api.ThinkValue{Value: budget}
-		}
-	}
-
 	if shouldUseHarmony(m) {
 		if m.Config.Parser == "" {
 			m.Config.Parser = "harmony"
