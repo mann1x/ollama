@@ -141,12 +141,7 @@ func (r *Gemma4Renderer) Render(messages []api.Message, tools []api.Tool, thinkV
 		if r.emptyBlockOnNothink && !hasThink {
 			sb.WriteString("<|channel>thought\n<channel|>")
 		}
-	} else if prevMessageType == "tool_response" && hasThink && !budgetInForce(thinkValue) {
-		// Prefilling the opening tag puts the model inside a thinking block it
-		// never opened itself. The runner's budget sampler activates on seeing
-		// that tag in generated output, so a prefilled one leaves it idle and
-		// the budget silently does not apply — which is every turn of an agent
-		// loop. With a budget in force, let the model open the block.
+	} else if prevMessageType == "tool_response" && hasThink {
 		sb.WriteString("<|channel>thought\n")
 	}
 
@@ -839,15 +834,4 @@ func (r *Gemma4Renderer) formatArrayValue(arr []any) string {
 	}
 	sb.WriteString("]")
 	return sb.String()
-}
-
-// budgetInForce reports whether the think value carries a thinking-token
-// budget, either as an explicit token count or as a level. Callers normalise a
-// model's own think_budget parameter onto the think value before rendering, so
-// this covers the Modelfile form as well as the per-request one.
-func budgetInForce(think *api.ThinkValue) bool {
-	if think == nil || think.Value == nil {
-		return false
-	}
-	return think.IsInt() || think.IsString()
 }

@@ -84,14 +84,6 @@ func (p *Gemma4Parser) Init(tools []api.Tool, lastMessage *api.Message, thinkVal
 	}
 
 	if lastMessage != nil && lastMessage.Role == "tool" {
-		// The renderer prefills the opening tag after a tool response, so the
-		// model resumes inside a block it never opened — except when a budget
-		// is in force, where the prefill is skipped so the runner's sampler can
-		// see the tag being generated. Match whichever the renderer did.
-		if budgetInForce(thinkValue) {
-			p.state = Gemma4CollectingContent
-			return tools
-		}
 		p.state = Gemma4CollectingThinking
 		p.needsChannelNameStrip = false
 		return tools
@@ -870,14 +862,4 @@ func gemma4PropertyAcceptsString(prop api.ToolProperty) bool {
 
 func gemma4LooksLikeJSONLiteralStart(ch byte) bool {
 	return ch == '-' || ('0' <= ch && ch <= '9') || ch == 't' || ch == 'f' || ch == 'n'
-}
-
-// budgetInForce reports whether the think value carries a thinking-token
-// budget, either as an explicit count or as a level. It mirrors the renderer's
-// test, so parser state and prompt prefill can never disagree.
-func budgetInForce(think *api.ThinkValue) bool {
-	if think == nil || think.Value == nil {
-		return false
-	}
-	return think.IsInt() || think.IsString()
 }
