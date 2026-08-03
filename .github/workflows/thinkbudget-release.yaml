@@ -2,6 +2,11 @@
 # without building Go themselves. Binaries only: the llama.cpp runtime this
 # needs is b10091, which is exactly what stock 0.32.5 already ships, so a
 # tester drops this binary over an existing install and keeps everything else.
+#
+# Deliberately uses no third-party actions — not actions/checkout, not
+# setup-go, not upload-artifact. A fork whose policy is "local_only" blocks
+# those and the run sits queued forever. git, go and gh are all preinstalled
+# on the hosted runners, so the workflow depends on nothing it cannot see.
 name: thinkbudget test build
 
 on:
@@ -23,8 +28,28 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_TOKEN: ${{ github.token }}
+  GOTOOLCHAIN: auto
+
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: create the release
+        working-directory: repo
+        run: |
+          gh release delete "${{ inputs.tag }}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${{ inputs.tag }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "ollama ${{ inputs.version }} — thinking budget test build" \
+            --prerelease \
+            --notes-file .github/workflows/thinkbudget-release-notes.md
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -39,20 +64,18 @@ jobs:
             asset: ollama-darwin-arm64
             out: ollama
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            LLAMA_CPP_VERSION
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: go version
+        run: go version
       # -s -w is not optional: an unstripped cgo build produces a PE that
       # Windows refuses to load ("This app can't run on your PC").
       - name: build
-        shell: bash
+        working-directory: repo
         env:
           CGO_ENABLED: "1"
         run: |
@@ -62,37 +85,25 @@ jobs:
           cp "${{ matrix.out }}" "${{ matrix.asset }}"
           ls -la "${{ matrix.asset }}"
       - name: smoke test
-        shell: bash
+        working-directory: repo
         if: matrix.os != 'macos-latest'
         run: ./${{ matrix.out }} --version || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
-          if-no-files-found: error
+      - name: attach to the release
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" "${{ matrix.asset }}" --clobber
 
-  release:
+  checksums:
     needs: build
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: checksums
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: sha256
+        working-directory: repo
         run: |
-          cd dist && sha256sum * > sha256sum.txt && cat sha256sum.txt
-      - name: publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete "${{ inputs.tag }}" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "${{ inputs.tag }}" dist/* \
-            --target "${{ inputs.ref }}" \
-            --title "ollama ${{ inputs.version }} — thinking budget test build" \
-            --prerelease \
-            --notes-file .github/workflows/thinkbudget-release-notes.md
+          mkdir -p dist && cd dist
+          gh release download "${{ inputs.tag }}" --pattern 'ollama-*' --clobber
+          sha256sum ollama-* > sha256sum.txt
+          cat sha256sum.txt
+          gh release upload "${{ inputs.tag }}" sha256sum.txt --clobber
