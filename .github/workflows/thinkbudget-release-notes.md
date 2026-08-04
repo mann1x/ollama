@@ -1,5 +1,13 @@
 Test build of the thinking-budget work — **not** an official Ollama release, and not endorsed by the Ollama project. It exists so people can try the feature and report what breaks.
 
+## New in this build
+
+**The thinking budget bounds a response, not a block.** A budget that re-armed in full on every thinking block bounded a block, not a turn: a model that closes each block by itself just short of its window and opens another was never cut. Measured on gemma4 through a coding agent — six consecutive blocks against an 8,000-token budget, none exhausted, a 32,000-token output cap consumed, and a turn that produced neither an answer nor a tool call. The budget is now spent across the response, and a tool call forgives what the thinking before it spent, so a long agentic turn does not run out of thinking after its first few steps.
+
+**The cut lands at the end of a line.** The forced message used to be spliced in wherever the token counter ran out, mid word: `Actually, I'Considering the limited time by the user...`. It now waits for the model to finish the line, and gives up after 64 tokens if no newline arrives — base64, a long single-line table, a run-on paragraph.
+
+Both live in llama.cpp's reasoning-budget sampler, which is why this release also ships a runtime — see Installing.
+
 ## What it adds
 
 `think` accepts a token count or an effort level, and a model can carry its own default:
@@ -27,7 +35,7 @@ Three fixes found by running the budget under a real coding agent. Each is indep
 
 ## Installing
 
-These are the `ollama` binary only. The runtime it needs (llama.cpp **b10091**) is what stock **0.32.5** already ships, so:
+Earlier builds were the `ollama` binary alone, because the runtime the budget needed was llama.cpp **b10091** — exactly what stock **0.32.5** ships. That is no longer true: the two changes at the top of these notes are in the budget sampler itself, which compiles into `lib/ollama`, not into `ollama.exe`. On Windows, install both or you get the half that asks for behaviour the runtime does not have.
 
 1. Install official Ollama **0.32.5** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
@@ -35,9 +43,12 @@ These are the `ollama` binary only. The runtime it needs (llama.cpp **b10091**) 
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
    - **Linux** — `/usr/local/bin/ollama` (or wherever `which ollama` points)
    - **macOS** — inside `Ollama.app`, or your Homebrew/manual install path
-4. Start it again. `ollama --version` should report `0.32.5-thinkbudget`.
+4. **Windows only:** unpack `ollama-windows-amd64-runtime.zip` over `%LOCALAPPDATA%\Programs\Ollama\lib\ollama`, replacing the files it contains. It holds the base runtime — `llama-server.exe`, `libllama-common.dll`, `libllama.dll`, the `ggml-cpu-*` variants. Leave the `cuda_v12\`, `cuda_v13\`, `rocm_v7_1\` and `vulkan\` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
+5. Start it again. `ollama --version` should report `0.32.5-thinkbudget`.
 
-Keep a copy of the original binary — reverting is just putting it back.
+Keep a copy of the original binary and of the files you replace in `lib\ollama` — reverting is just putting them back.
+
+**Linux and macOS** get the binary only for now, so the budget works as it did in earlier builds (per-block, cut wherever the counter lands). Build the runtime from the branch if you want the two new behaviours there.
 
 ## Trying it
 
@@ -68,6 +79,7 @@ A client that sends no `think` field still gets the model's own budget, which is
 - Unsigned, built by GitHub Actions from this fork. Windows SmartScreen will complain.
 - macOS arm64 only; no Intel build. Gatekeeper blocks unsigned downloads — `xattr -d com.apple.quarantine ollama-darwin-arm64` before running it.
 - The Linux binary is built against glibc 2.28, so it runs on RHEL 8, Ubuntu 20.04 and Debian 11 upwards. Verify a download against `sha256sum.txt` before replacing anything.
+- The Windows runtime archive is built with the MSYS2 clang64 toolchain, which is what the shipped DLLs use, so it drops in beside the CUDA and Vulkan backends already installed. It replaces the CPU/base set only.
 - Only models with a thinking block are affected. Everything else is untouched.
 - MLX runners ignore the fields.
 
