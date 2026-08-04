@@ -284,7 +284,7 @@ func ToChatCompletion(id string, r api.ChatResponse) ChatCompletion {
 					return &reason
 				}
 				return nil
-			}(r.DoneReason),
+			}(openAIFinishReason(r.DoneReason)),
 			Logprobs: logprobs,
 		}}, Usage: ToUsage(r),
 		DebugInfo: r.DebugInfo,
@@ -316,7 +316,7 @@ func toChunk(id string, r api.ChatResponse, toolCallSent bool) ChatCompletionChu
 					return &reason
 				}
 				return nil
-			}(r.DoneReason),
+			}(openAIFinishReason(r.DoneReason)),
 			Logprobs: logprobs,
 		}},
 	}
@@ -377,7 +377,7 @@ func ToCompletion(id string, r api.GenerateResponse) Completion {
 					return &reason
 				}
 				return nil
-			}(r.DoneReason),
+			}(openAIFinishReason(r.DoneReason)),
 		}},
 		Usage: ToUsageGenerate(r),
 	}
@@ -399,9 +399,19 @@ func ToCompleteChunk(id string, r api.GenerateResponse) CompletionChunk {
 					return &reason
 				}
 				return nil
-			}(r.DoneReason),
+			}(openAIFinishReason(r.DoneReason)),
 		}},
 	}
+}
+
+// openAIFinishReason maps ollama's done reasons onto the values OpenAI clients
+// expect. A generation stopped for repeating itself was cut short, which is
+// what "length" means to them; anything else already carries a name they know.
+func openAIFinishReason(reason string) string {
+	if reason == "repeat" {
+		return "length"
+	}
+	return reason
 }
 
 // ToListCompletion converts an api.ListResponse to ListCompletion
