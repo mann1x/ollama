@@ -26,3 +26,8 @@ ml/backend/ggml/ggml/src/ggml-metal/ggml-metal-embed.s linguist-generated
 
 * text=auto
 *.go text eol=lf
+
+# Patches are applied with `git apply` to sources fetched from upstream, which
+# are checked out with LF. `* text=auto` above would otherwise hand these to a
+# Windows working tree as CRLF, and every context line would fail to match.
+*.patch text eol=lf
