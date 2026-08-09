@@ -210,17 +210,37 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 		// word "thought" sitting after the budget message. Measured live on
 		// gemma4 with a 16,000-token budget.
 		if p.strayChannelName {
-			if stripped, ok := strings.CutPrefix(bufStr, gemma4ThinkingChannelName); ok {
-				bufStr = strings.TrimLeftFunc(stripped, unicode.IsSpace)
-				p.buffer.Reset()
-				p.buffer.WriteString(bufStr)
-				p.strayChannelName = false
-			} else if !done && strings.HasPrefix(gemma4ThinkingChannelName, bufStr) {
-				// Split across chunks: "thou" now, the rest next.
-				return events, false
-			} else {
-				p.strayChannelName = false
+			// The header and the closing tag are both orphans of the same event
+			// and arrive in either order, so they are stripped in a loop rather
+			// than once each. A turn cut at the *output cap* rather than at the
+			// budget leaves the tag behind as well: the sampler had already
+			// forced its message and closed the block, and the model's own
+			// <channel|> lands afterwards, in content, where it reads as the
+			// literal tag in the middle of an answer. Measured live twice on
+			// 2026-08-09 against a runtime that already dropped the bare header.
+			for {
+				trimmed := strings.TrimLeftFunc(bufStr, unicode.IsSpace)
+				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingCloseTag); ok {
+					bufStr = stripped
+					continue
+				}
+				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingChannelName); ok {
+					bufStr = stripped
+					continue
+				}
+				// Split across chunks: a prefix of either orphan now, the rest
+				// next. Waiting is only safe while more is coming.
+				if !done && trimmed != "" &&
+					(strings.HasPrefix(gemma4ThinkingCloseTag, trimmed) ||
+						strings.HasPrefix(gemma4ThinkingChannelName, trimmed)) {
+					return events, false
+				}
+				bufStr = trimmed
+				break
 			}
+			p.buffer.Reset()
+			p.buffer.WriteString(bufStr)
+			p.strayChannelName = false
 		}
 
 		// Check for thinking open tag
