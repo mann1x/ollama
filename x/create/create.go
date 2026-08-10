@@ -297,6 +297,11 @@ func GetTensorQuantization(name string, shape []int32, quantize string) string {
 		return ""
 	}
 
+	// Vision components are too quantization-sensitive; keep source precision.
+	if isVision(name) {
+		return ""
+	}
+
 	// MLX quantization requires last dimension to be divisible by group size.
 	if !isAligned(shape, quantNorm) {
 		return ""
@@ -480,6 +485,7 @@ var tensorImportTransformRegistry = map[string]tensorImportTransformFactory{
 	"gemma4_unified":                        newGemma4ImportTransform,
 	"gemma4_unified_text":                   newGemma4ImportTransform,
 	"LagunaForCausalLM":                     newLagunaImportTransform,
+	"MuseGlimmerForConditionalGeneration":   newGlimmerImportTransform,
 	"Cohere2MoeForCausalLM":                 newCohere2MoeImportTransform,
 	"Gemma4AssistantForCausalLM":            newGemma4ImportTransform,
 	"Gemma4UnifiedAssistantForCausalLM":     newGemma4ImportTransform,
