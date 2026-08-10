@@ -2,6 +2,12 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+Nothing new in the budget itself — this is the same feature set, rebuilt on Ollama **0.32.7**, so it keeps working for anyone taking that upgrade.
+
+If you are already running 0.32.6-thinkbudget, replace the binary and stop there. 0.32.7 vendors exactly the llama.cpp 0.32.6 did: `LLAMA_CPP_VERSION` is **b10242** in both tags and the `llama/` and `ml/` trees are byte-identical between them, so the runtime in this release is the runtime you already installed.
+
+## How the budget behaves
+
 **The thinking budget bounds a response, not a block.** A budget that re-armed in full on every thinking block bounded a block, not a turn: a model that closes each block by itself just short of its window and opens another was never cut. Measured on gemma4 through a coding agent — six consecutive blocks against an 8,000-token budget, none exhausted, a 32,000-token output cap consumed, and a turn that produced neither an answer nor a tool call. The budget is now spent across the response, and a tool call forgives what the thinking before it spent, so a long agentic turn does not run out of thinking after its first few steps.
 
 **The cut lands at the end of a line.** The forced message used to be spliced in wherever the token counter ran out, mid word: `Actually, I'Considering the limited time by the user...`. It now waits for the model to finish the line, and gives up after 64 tokens if no newline arrives — base64, a long single-line table, a run-on paragraph.
@@ -25,30 +31,31 @@ The cap is enforced by llama.cpp's reasoning-budget sampler, not by trimming out
 
 ## Also in this build
 
-Three fixes found by running the budget under a real coding agent. Each is independent of the budget and helps any tool-using model.
+Four fixes found by running the budget under a real coding agent. Each is independent of the budget and helps any tool-using model.
 
 | fix | what went wrong before |
 | --- | --- |
 | [#3](https://github.com/mann1x/ollama/pull/3) repeat guard | A generation was aborted after 31 identical tokens and the abort was reported as success, so the stream ended with no `done` and every client raised "Did not receive done or success response in stream". Base64 of a file, a hex dump, or a run of indentation was enough to trigger it. The run is now measured in characters with a budget no real payload reaches, a repeating unit of up to 32 tokens is recognised, and a generation stopped this way ends with `done_reason: "repeat"`. |
 | [#4](https://github.com/mann1x/ollama/pull/4) truncated tool calls | A response that ran out of tokens mid-tool-call handed over the arguments that had arrived, so a caller saw a complete-looking call with a required argument missing and reported a schema error naming a field the model was still writing. Such a call is now dropped, and only when the generation actually stopped at the limit. |
 | [#5](https://github.com/mann1x/ollama/pull/5) gemma4 tool calls | A Gemma 4 tool call that was complete apart from its final `}` failed to parse and was dropped silently, so the caller received an empty response. It is now recovered — but only when the model emitted its closing tag, which rules out truncation. |
+| [#6](https://github.com/mann1x/ollama/pull/6) gemma4 channel leaks | Closing a thinking block from outside leaves the model still writing the parts that belong inside it. The channel header arrived first in the answer, so a 16,000-token budget put the bare word "thought" in the middle of a chat reply; a turn cut at the output cap rather than at the budget left the closing `<channel|>` behind the same way. Both orphans are now dropped, including when they arrive split across streaming chunks. |
 
 ## Installing
 
-Earlier builds were the `ollama` binary alone, because the runtime the budget needed was llama.cpp **b10091** — exactly what stock **0.32.5** ships. That is no longer true: the two changes at the top of these notes are in the budget sampler itself, which compiles into `lib/ollama`, not into `ollama.exe`. On Windows, install both or you get the half that asks for behaviour the runtime does not have.
+The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into `ollama.exe`, so on Windows you install both or you get the half that asks for behaviour the runtime does not have. Coming from 0.32.6-thinkbudget you can skip step 4 — that runtime is unchanged, see the top of these notes.
 
-1. Install official Ollama **0.32.5** normally.
+1. Install official Ollama **0.32.7** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
 3. Replace the binary with the one from this release:
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
    - **Linux** — `/usr/local/bin/ollama` (or wherever `which ollama` points)
    - **macOS** — inside `Ollama.app`, or your Homebrew/manual install path
 4. **Windows only:** unpack `ollama-windows-amd64-runtime.zip` over `%LOCALAPPDATA%\Programs\Ollama\lib\ollama`, replacing the files it contains. It holds the base runtime — `llama-server.exe`, `libllama-common.dll`, `libllama.dll`, the `ggml-cpu-*` variants. Leave the `cuda_v12\`, `cuda_v13\`, `rocm_v7_1\` and `vulkan\` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
-5. Start it again. `ollama --version` should report `0.32.5-thinkbudget`.
+5. Start it again. `ollama --version` should report `0.32.7-thinkbudget`.
 
 Keep a copy of the original binary and of the files you replace in `lib\ollama` — reverting is just putting them back.
 
-**Linux and macOS** get the binary only for now, so the budget works as it did in earlier builds (per-block, cut wherever the counter lands). Build the runtime from the branch if you want the two new behaviours there.
+**Linux and macOS** get the binary only: CI publishes a runtime archive for Windows and not for them. Without a matching runtime the budget falls back to what earlier builds did — per block, cut wherever the counter lands. Building `llama/server` from this tag and overlaying `libllama-common`, `libllama`, `libmtmd` and `libllama-server-impl` onto the stock `lib/ollama` gives the full behaviour; leave ggml and the `cuda_v*` folders alone, they are untouched by the patches.
 
 ## Trying it
 
@@ -83,4 +90,4 @@ A client that sends no `think` field still gets the model's own budget, which is
 - Only models with a thinking block are affected. Everything else is untouched.
 - MLX runners ignore the fields.
 
-Feedback in the pull requests please: [#1](https://github.com/mann1x/ollama/pull/1) for the budget, [#3](https://github.com/mann1x/ollama/pull/3) / [#4](https://github.com/mann1x/ollama/pull/4) / [#5](https://github.com/mann1x/ollama/pull/5) for the fixes above.
+Feedback in the pull requests please: [#1](https://github.com/mann1x/ollama/pull/1) for the budget, [#3](https://github.com/mann1x/ollama/pull/3) / [#4](https://github.com/mann1x/ollama/pull/4) / [#5](https://github.com/mann1x/ollama/pull/5) / [#6](https://github.com/mann1x/ollama/pull/6) for the fixes above.
