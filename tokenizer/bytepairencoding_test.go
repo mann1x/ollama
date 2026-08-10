@@ -501,6 +501,10 @@ func TestSentencePieceBPE(t *testing.T) {
 	})
 }
 
+// splitSink keeps the collected split from being discarded, which both keeps
+// the compiler from eliding the work being measured and gives the call a use.
+var splitSink []string
+
 func BenchmarkBytePairEncoding(b *testing.B) {
 	tokenizer := llama(b)
 	bts, err := os.ReadFile(filepath.Join("testdata", "war-and-peace.txt"))
@@ -539,7 +543,7 @@ func BenchmarkBytePairEncoding(b *testing.B) {
 		b.Run("split"+strconv.Itoa(n), func(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
-				slices.Collect(tokenizer.split(string(bts)))
+				splitSink = slices.Collect(tokenizer.split(string(bts)))
 			}
 		})
 	}
