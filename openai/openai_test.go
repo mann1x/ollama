@@ -815,6 +815,24 @@ func TestFinishChunk(t *testing.T) {
 			expectedReason: "unload",
 		},
 		{
+			// The repeat guard's own done reason. OpenAI has no name for it, and
+			// a generation stopped for repeating itself was cut short, which is
+			// what "length" means to a client.
+			name:           "repeat_becomes_length",
+			doneReason:     "repeat",
+			toolCallSent:   false,
+			expectedReason: "length",
+		},
+		{
+			// It maps to "length", not to "stop", so a tool call sent earlier in
+			// the stream must not relabel it "tool_calls" — the call the model
+			// was writing is exactly what got cut off.
+			name:           "repeat_with_tool_calls_stays_length",
+			doneReason:     "repeat",
+			toolCallSent:   true,
+			expectedReason: "length",
+		},
+		{
 			name:           "unknown_reason_not_relabeled_tool_calls",
 			doneReason:     "unload",
 			toolCallSent:   true,
@@ -992,6 +1010,11 @@ func TestToChatCompletion_FinishReasonPrecedence(t *testing.T) {
 	// An unrelated finish reason passes through unchanged.
 	if got := *ToChatCompletion("test-id", newToolCallResponse("unload")).Choices[0].FinishReason; got != "unload" {
 		t.Fatalf("expected unknown finish reason %q to pass through, got %q", "unload", got)
+	}
+	// A response the repeat guard stopped reports "length", not "tool_calls":
+	// the tool call it carries is the one that was being repeated.
+	if got := *ToChatCompletion("test-id", newToolCallResponse("repeat")).Choices[0].FinishReason; got != "length" {
+		t.Fatalf("expected finish reason %q for a repeat-stopped response, got %q", "length", got)
 	}
 }
 
