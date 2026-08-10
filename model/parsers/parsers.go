@@ -144,6 +144,8 @@ func ParserForName(name string) Parser {
 		return &LagunaV8Parser{}
 	case "cohere":
 		return &CohereParser{}
+	case "glimmer":
+		return &GlimmerParser{}
 	default:
 		return nil
 	}
