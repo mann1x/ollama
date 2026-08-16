@@ -2,9 +2,11 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-Nothing new in the budget itself — this is the same feature set, rebuilt on Ollama **0.32.7**, so it keeps working for anyone taking that upgrade.
+Nothing new in the budget itself — this is the same feature set, rebuilt on Ollama **0.32.14**, so it keeps working for anyone taking that upgrade.
 
-If you are already running 0.32.6-thinkbudget, replace the binary and stop there. 0.32.7 vendors exactly the llama.cpp 0.32.6 did: `LLAMA_CPP_VERSION` is **b10242** in both tags and the `llama/` and `ml/` trees are byte-identical between them, so the runtime in this release is the runtime you already installed.
+**Unlike the last two builds, the runtime moved.** 0.32.7 vendored llama.cpp b10242; 0.32.14 vendors **b10434**. Coming from 0.32.7-thinkbudget on Windows you need step 4 as well as step 3 — a b10242 runtime under a 0.32.14 binary is not a combination anyone has tested. Both compat patches apply to b10434 unchanged, so the budget behaves exactly as it did.
+
+One thing changed in what the OpenAI-compatible endpoint accepts. 0.32.14 added `xhigh` and `ultra` as reasoning efforts and mapped `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.32.14, which is the level doing what it says.
 
 ## How the budget behaves
 
@@ -42,16 +44,16 @@ Four fixes found by running the budget under a real coding agent. Each is indepe
 
 ## Installing
 
-The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into `ollama.exe`, so on Windows you install both or you get the half that asks for behaviour the runtime does not have. Coming from 0.32.6-thinkbudget you can skip step 4 — that runtime is unchanged, see the top of these notes.
+The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into `ollama.exe`, so on Windows you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10242 to b10434, so the runtime in this release is not the one you already installed. See the top of these notes.
 
-1. Install official Ollama **0.32.7** normally.
+1. Install official Ollama **0.32.14** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
 3. Replace the binary with the one from this release:
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
    - **Linux** — `/usr/local/bin/ollama` (or wherever `which ollama` points)
    - **macOS** — inside `Ollama.app`, or your Homebrew/manual install path
 4. **Windows only:** unpack `ollama-windows-amd64-runtime.zip` over `%LOCALAPPDATA%\Programs\Ollama\lib\ollama`, replacing the files it contains. It holds the base runtime — `llama-server.exe`, `libllama-common.dll`, `libllama.dll`, the `ggml-cpu-*` variants. Leave the `cuda_v12\`, `cuda_v13\`, `rocm_v7_1\` and `vulkan\` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
-5. Start it again. `ollama --version` should report `0.32.7-thinkbudget`.
+5. Start it again. `ollama --version` should report `0.32.14-thinkbudget`.
 
 Keep a copy of the original binary and of the files you replace in `lib\ollama` — reverting is just putting them back.
 
