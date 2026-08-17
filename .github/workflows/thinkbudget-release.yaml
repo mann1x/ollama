@@ -191,7 +191,7 @@ jobs:
 
           # prove the compat patches reached the fetched source before compiling
           $rb = 'build/llama-server-cpu/_deps/llama_cpp-src/common/reasoning-budget.cpp'
-          foreach ($needle in @('WAITING_BOUNDARY', 'REASONING_BUDGET_SCOPE_RESPONSE')) {
+          foreach ($needle in @('WAITING_BOUNDARY', 'REASONING_BUDGET_SCOPE_RESPONSE', 'forced_end_pos')) {
             if (-not (Select-String -Path $rb -Pattern $needle -Quiet)) { throw "compat patch did not bring $needle into $rb" }
             Write-Output "patch applied: $needle present"
           }
