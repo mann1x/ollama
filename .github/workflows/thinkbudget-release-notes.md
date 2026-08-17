@@ -2,9 +2,13 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-Nothing new in the budget itself — this is the same feature set, rebuilt on Ollama **0.32.14**, so it keeps working for anyone taking that upgrade.
+**A spent budget says its message once, and stays closed.** With the budget spent across a response, a model that opened another thinking block got that block closed — and because the forced sequence is *message + closing tag*, it got the whole message again with it. It then opened another. Measured through a coding agent on a 13,750-token budget: one turn carrying the identical 240-character message thirty-two times in a row, nothing between the copies, ending at its output cap with no answer and no tool call. A block reopened with nothing left is now closed with the closing tag alone, and while the response has nothing left the sequence that opens a block is barred outright, so the model is left with the choice a spent budget is asking of it — answer, or call something. A tool call forgives the spend and lifts both, as it already did for the budget itself.
 
-**Unlike the last two builds, the runtime moved.** 0.32.7 vendored llama.cpp b10242; 0.32.14 vendors **b10434**. Coming from 0.32.7-thinkbudget on Windows you need step 4 as well as step 3 — a b10242 runtime under a 0.32.14 binary is not a combination anyone has tested. Both compat patches apply to b10434 unchanged, so the budget behaves exactly as it did.
+This is in the runtime, not the binary: take the runtime archive as well, even coming from an earlier 0.32.14-thinkbudget build.
+
+Otherwise the same feature set, rebuilt on Ollama **0.32.14**, so it keeps working for anyone taking that upgrade.
+
+**Unlike the last two builds, the runtime moved.** 0.32.7 vendored llama.cpp b10242; 0.32.14 vendors **b10434**. Coming from 0.32.7-thinkbudget on Windows you need step 4 as well as step 3 — a b10242 runtime under a 0.32.14 binary is not a combination anyone has tested. Both compat patches apply to b10434, and apart from the fix above the budget behaves exactly as it did.
 
 One thing changed in what the OpenAI-compatible endpoint accepts. 0.32.14 added `xhigh` and `ultra` as reasoning efforts and mapped `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.32.14, which is the level doing what it says.
 
