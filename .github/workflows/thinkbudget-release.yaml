@@ -68,12 +68,23 @@ jobs:
           - os: ubuntu-latest
             asset: ollama-linux-amd64
             out: ollama
+            extldflags: ""
           - os: windows-latest
             asset: ollama-windows-amd64.exe
             out: ollama.exe
+            # A cgo build on the runner links against the toolchain's mingw
+            # runtime and imports libwinpthread-1.dll, which no clean Windows
+            # install has: the binary dies at load with 0xC0000135
+            # (STATUS_DLL_NOT_FOUND) before main() runs. It went unnoticed
+            # because every machine it had been tried on -- the runner itself
+            # included -- carries MSYS2. Link it in instead.
+            extldflags: "-extldflags=-static"
           - os: macos-latest
             asset: ollama-darwin-arm64
             out: ollama
+            # Not on darwin: the system libc is not available statically and
+            # the link fails outright.
+            extldflags: ""
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -137,10 +148,27 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           go build -trimpath \
-            -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=${{ inputs.version }} -X=github.com/ollama/ollama/server.mode=release" \
+            -ldflags "-s -w ${{ matrix.extldflags }} -X=github.com/ollama/ollama/version.Version=${{ inputs.version }} -X=github.com/ollama/ollama/server.mode=release" \
             -o "${{ matrix.out }}" .
           cp "${{ matrix.out }}" "${{ matrix.asset }}"
           ls -la "${{ matrix.asset }}"
+      # The runner cannot smoke-test its way to this answer: it has the mingw
+      # DLLs, so a binary that depends on them starts here and dies on a user's
+      # machine. Read the import table instead. Anything outside the Windows
+      # system set has to be absent from the file.
+      - name: no third-party DLL imports
+        if: matrix.os == 'windows-latest'
+        working-directory: repo
+        run: |
+          bad=0
+          for dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll libgomp-1.dll; do
+            if grep -qa "$dll" "${{ matrix.asset }}"; then
+              echo "::error::${{ matrix.asset }} still references $dll; it will not load on a clean Windows install"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] && echo "no third-party DLL references found"
+          exit "$bad"
       - name: smoke test
         working-directory: repo
         if: matrix.os != 'macos-latest'
