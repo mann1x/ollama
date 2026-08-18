@@ -8,8 +8,9 @@
 # common/reasoning-budget.*, which compiles into lib/ollama, not into ollama.exe.
 # Shipping only the binary would ship the half that asks for behaviour the
 # runtime does not have, which looks exactly like the feature not working. So
-# the Windows runtime is built here too, with the MSYS2 clang64 toolchain the
-# shipped DLLs are built with, and attached as its own archive.
+# the runtime is built here too and attached as its own archive: on Windows
+# with the MSYS2 clang64 toolchain the shipped DLLs are built with, and on
+# Linux inside AlmaLinux 8 so it loads on the glibc the binary already targets.
 #
 # Deliberately uses no third-party actions — not actions/checkout, not
 # setup-go, not upload-artifact. A fork whose policy is "local_only" blocks
@@ -211,8 +212,76 @@ jobs:
         working-directory: repo
         run: gh release upload "${{ inputs.tag }}" ollama-windows-amd64-runtime.zip --clobber
 
+  # The same half, for Linux, and for the same reason: without it a tester on
+  # Linux has the binary asking for behaviour the runtime does not have, which
+  # is indistinguishable from the feature not working. Built inside AlmaLinux 8
+  # exactly as the binary is — a runner-native build links against glibc 2.39
+  # and refuses to load on anything older than 2.34, which is most of what
+  # people are actually running. Base runtime only: the patch lives in
+  # libllama-common, and ggml-cuda, ggml-vulkan and the ROCm backend reach it
+  # through ggml's C ABI, so an existing GPU install keeps working untouched.
+  linux-runtime:
+    needs: prepare
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: build the runtime
+        working-directory: repo
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash -euo pipefail -c '
+            # gcc-toolset-12, not the stock gcc 8.5: GGML_CPU_ALL_VARIANTS
+            # compiles the sapphirerapids variant with -mamx-tile, which no
+            # compiler before gcc 11 recognises ("unrecognized command-line
+            # option"). git is needed too — llama/compat applies its patches
+            # with `git apply`.
+            dnf install -y -q gcc-toolset-12 cmake git make tar gzip findutils > /dev/null
+            source /opt/rh/gcc-toolset-12/enable
+            # The presets ask for CMake 3.24. AlmaLinux 8 has carried 3.26
+            # since 8.9, but fetch rather than fail a release on a base-image
+            # change nobody here controls.
+            have=$(cmake --version | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+            if [ "$(printf "%s\n3.24\n" "$have" | sort -V | head -1)" != "3.24" ]; then
+              curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz -o /tmp/cmake.tgz
+              tar -C /usr/local --strip-components=1 -xzf /tmp/cmake.tgz
+            fi
+            cmake --version
+            cmake -S llama/server --preset cpu -DGGML_CCACHE=OFF --install-prefix /src/dist
+
+            # prove the compat patches reached the fetched source before compiling
+            rb=build/llama-server-cpu/_deps/llama_cpp-src/common/reasoning-budget.cpp
+            for needle in WAITING_BOUNDARY REASONING_BUDGET_SCOPE_RESPONSE forced_end_pos; do
+              grep -q "$needle" "$rb" || { echo "compat patch did not bring $needle into $rb"; exit 1; }
+              echo "patch applied: $needle present"
+            done
+
+            cmake --build build/llama-server-cpu --parallel "$(nproc)"
+            cmake --install build/llama-server-cpu --component llama-server --strip
+          '
+          # everything docker wrote is root-owned; the steps after this are not
+          sudo chown -R "$(id -u):$(id -g)" dist build
+          ls -la dist/lib/ollama
+          # prove the portability claim rather than assuming it
+          objdump -T dist/lib/ollama/libllama-common.so.* | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
+      - name: smoke test
+        working-directory: repo
+        run: ./dist/lib/ollama/llama-server --version || true
+      - name: package
+        working-directory: repo
+        run: |
+          # An `ollama/` directory at the archive root, so installing it is
+          # `tar -C /usr/local/lib -xzf` over the directory it already has.
+          tar -C dist/lib -czf ollama-linux-amd64-runtime.tgz ollama
+          ls -la ollama-linux-amd64-runtime.tgz
+      - name: attach to the release
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" ollama-linux-amd64-runtime.tgz --clobber
+
   checksums:
-    needs: [build, windows-runtime]
+    needs: [build, windows-runtime, linux-runtime]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -48,7 +48,7 @@ Four fixes found by running the budget under a real coding agent. Each is indepe
 
 ## Installing
 
-The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into `ollama.exe`, so on Windows you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10242 to b10434, so the runtime in this release is not the one you already installed. See the top of these notes.
+The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into the binary, so you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10242 to b10434, so the runtime in this release is not the one you already installed. See the top of these notes.
 
 1. Install official Ollama **0.32.14** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
@@ -56,12 +56,16 @@ The binary is not enough on its own. Both behaviours described above are in the 
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
    - **Linux** — `/usr/local/bin/ollama` (or wherever `which ollama` points)
    - **macOS** — inside `Ollama.app`, or your Homebrew/manual install path
-4. **Windows only:** unpack `ollama-windows-amd64-runtime.zip` over `%LOCALAPPDATA%\Programs\Ollama\lib\ollama`, replacing the files it contains. It holds the base runtime — `llama-server.exe`, `libllama-common.dll`, `libllama.dll`, the `ggml-cpu-*` variants. Leave the `cuda_v12\`, `cuda_v13\`, `rocm_v7_1\` and `vulkan\` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
+4. Replace the runtime as well:
+   - **Windows** — unpack `ollama-windows-amd64-runtime.zip` over `%LOCALAPPDATA%\Programs\Ollama\lib\ollama`, replacing the files it contains.
+   - **Linux** — `sudo tar -C /usr/local/lib -xzf ollama-linux-amd64-runtime.tgz`, which replaces the files in `/usr/local/lib/ollama`. If your install put them elsewhere, unpack somewhere scratch and copy over that directory instead.
+
+   Both archives hold the base runtime only — `llama-server`, `libllama-common`, `libllama`, `libmtmd`, `libllama-server-impl` and the `ggml-cpu-*` variants. Leave the `cuda_v12`, `cuda_v13`, `rocm_v7_1` and `vulkan` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
 5. Start it again. `ollama --version` should report `0.32.14-thinkbudget`.
 
-Keep a copy of the original binary and of the files you replace in `lib\ollama` — reverting is just putting them back.
+Keep a copy of the original binary and of the files you replace in `lib/ollama` — reverting is just putting them back.
 
-**Linux and macOS** get the binary only: CI publishes a runtime archive for Windows and not for them. Without a matching runtime the budget falls back to what earlier builds did — per block, cut wherever the counter lands. Building `llama/server` from this tag and overlaying `libllama-common`, `libllama`, `libmtmd` and `libllama-server-impl` onto the stock `lib/ollama` gives the full behaviour; leave ggml and the `cuda_v*` folders alone, they are untouched by the patches.
+**macOS** gets the binary only: CI publishes a runtime archive for Windows and Linux and not for it. Without a matching runtime the budget falls back to what earlier builds did — per block, cut wherever the counter lands. Building `llama/server` from this tag and overlaying `libllama-common`, `libllama`, `libmtmd` and `libllama-server-impl` onto the stock `lib/ollama` gives the full behaviour; leave ggml and the backend folders alone, they are untouched by the patches.
 
 ## Trying it
 
@@ -91,8 +95,8 @@ A client that sends no `think` field still gets the model's own budget, which is
 
 - Unsigned, built by GitHub Actions from this fork. Windows SmartScreen will complain.
 - macOS arm64 only; no Intel build. Gatekeeper blocks unsigned downloads — `xattr -d com.apple.quarantine ollama-darwin-arm64` before running it.
-- The Linux binary is built against glibc 2.28, so it runs on RHEL 8, Ubuntu 20.04 and Debian 11 upwards. Verify a download against `sha256sum.txt` before replacing anything.
-- The Windows runtime archive is built with the MSYS2 clang64 toolchain, which is what the shipped DLLs use, so it drops in beside the CUDA and Vulkan backends already installed. It replaces the CPU/base set only.
+- The Linux binary and the Linux runtime archive are both built against glibc 2.28, so they run on RHEL 8, Ubuntu 20.04 and Debian 11 upwards. Verify a download against `sha256sum.txt` before replacing anything.
+- The Windows runtime archive is built with the MSYS2 clang64 toolchain, which is what the shipped DLLs use, so it drops in beside the CUDA and Vulkan backends already installed. Both runtime archives replace the CPU/base set only.
 - Only models with a thinking block are affected. Everything else is untouched.
 - MLX runners ignore the fields.
 
