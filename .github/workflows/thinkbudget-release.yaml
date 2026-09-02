@@ -25,15 +25,15 @@ on:
     inputs:
       ref:
         description: branch, tag or SHA to build
-        default: thinkbudget-testing
+        default: thinkbudget-0.33.2
         required: true
       version:
         description: version string stamped into the binary
-        default: 0.32.5-thinkbudget
+        default: 0.33.2-thinkbudget
         required: true
       tag:
         description: release tag to create
-        default: v0.32.5-thinkbudget
+        default: v0.33.2-thinkbudget
         required: true
 
 permissions:

@@ -2,19 +2,24 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**A spent budget says its message once, and stays closed.** With the budget spent across a response, a model that opened another thinking block got that block closed — and because the forced sequence is *message + closing tag*, it got the whole message again with it. It then opened another. Measured through a coding agent on a 13,750-token budget: one turn carrying the identical 240-character message thirty-two times in a row, nothing between the copies, ending at its output cap with no answer and no tool call. A block reopened with nothing left is now closed with the closing tag alone, and while the response has nothing left the sequence that opens a block is barred outright, so the model is left with the choice a spent budget is asking of it — answer, or call something. A tool call forgives the spend and lifts both, as it already did for the budget itself.
+**A malformed tool call no longer fails the request.** Two ways a qwen3-coder-style call could be rejected outright, both found by running the fork under a coding agent for a fortnight:
 
-This is in the runtime, not the binary: take the runtime archive as well, even coming from an earlier 0.32.14-thinkbudget build.
+- A call that dropped its closing `</parameter>` came back as `expected element type <function>` and the whole request failed. The block is now repaired when the repair is unambiguous, and the call goes through.
+- A parameter whose *value* contained something that looks like markup — a snippet of HTML, an XML fragment, a shell redirect — was fed to the XML reader as markup and broke the parse. A value is text now, and is escaped as text.
 
-Otherwise the same feature set, rebuilt on Ollama **0.32.14**, so it keeps working for anyone taking that upgrade.
+When a call still cannot be read, it is handed back to the model as content instead of failing the turn. The model then sees what it emitted and can correct itself, which is what pressing Retry by hand was achieving anyway. An agent mid-turn has usually already run commands, so there is nothing safe to retry automatically and nothing useful to fail towards.
 
-**Unlike the last two builds, the runtime moved.** 0.32.7 vendored llama.cpp b10242; 0.32.14 vendors **b10434**. Coming from 0.32.7-thinkbudget on Windows you need step 4 as well as step 3 — a b10242 runtime under a 0.32.14 binary is not a combination anyone has tested. Both compat patches apply to b10434, and apart from the fix above the budget behaves exactly as it did.
+Otherwise the same feature set, rebuilt on Ollama **0.33.2**.
 
-One thing changed in what the OpenAI-compatible endpoint accepts. 0.32.14 added `xhigh` and `ultra` as reasoning efforts and mapped `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.32.14, which is the level doing what it says.
+**The runtime moved again.** 0.32.14 vendored llama.cpp b10434; 0.33.2 vendors **b10630**. Both compat patches apply to it unchanged and the budget behaves exactly as it did, but the runtime in this release is not the one in the last one — take the runtime archive as well as the binary, and see Installing.
+
+0.33.2 also changed how a parse error mid-stream is handled: the request now fails with a 500 instead of the completion callback wedging. That is upstream's fix and it is kept, but note that it is reached less often here, because of the repairs above.
 
 ## How the budget behaves
 
 **The thinking budget bounds a response, not a block.** A budget that re-armed in full on every thinking block bounded a block, not a turn: a model that closes each block by itself just short of its window and opens another was never cut. Measured on gemma4 through a coding agent — six consecutive blocks against an 8,000-token budget, none exhausted, a 32,000-token output cap consumed, and a turn that produced neither an answer nor a tool call. The budget is now spent across the response, and a tool call forgives what the thinking before it spent, so a long agentic turn does not run out of thinking after its first few steps.
+
+**A spent budget says its message once, and stays closed.** A model that opened another thinking block with the budget already spent got that block closed — and because the forced sequence is *message + closing tag*, it got the whole message again with it. It then opened another. Measured through a coding agent on a 13,750-token budget: one turn carrying the identical 240-character message thirty-two times in a row, ending at its output cap with no answer and no tool call. A block reopened with nothing left is now closed with the closing tag alone, and while the response has nothing left the sequence that opens a block is barred outright — so the model is left with the choice a spent budget is asking of it: answer, or call something. A tool call forgives the spend and lifts both.
 
 **The cut lands at the end of a line.** The forced message used to be spliced in wherever the token counter ran out, mid word: `Actually, I'Considering the limited time by the user...`. It now waits for the model to finish the line, and gives up after 64 tokens if no newline arrives — base64, a long single-line table, a run-on paragraph.
 
@@ -48,9 +53,9 @@ Four fixes found by running the budget under a real coding agent. Each is indepe
 
 ## Installing
 
-The binary is not enough on its own. Both behaviours described above are in the budget sampler, which compiles into `lib/ollama` and not into the binary, so you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10242 to b10434, so the runtime in this release is not the one you already installed. See the top of these notes.
+The binary is not enough on its own. Both behaviours described under *How the budget behaves* are in the budget sampler, which compiles into `lib/ollama` and not into the binary, so you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10434 to b10630, so the runtime in this release is not the one you already installed. See the top of these notes.
 
-1. Install official Ollama **0.32.14** normally.
+1. Install official Ollama **0.33.2** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
 3. Replace the binary with the one from this release:
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
@@ -61,7 +66,7 @@ The binary is not enough on its own. Both behaviours described above are in the 
    - **Linux** — `sudo tar -C /usr/local/lib -xzf ollama-linux-amd64-runtime.tgz`, which replaces the files in `/usr/local/lib/ollama`. If your install put them elsewhere, unpack somewhere scratch and copy over that directory instead.
 
    Both archives hold the base runtime only — `llama-server`, `libllama-common`, `libllama`, `libmtmd`, `libllama-server-impl` and the `ggml-cpu-*` variants. Leave the `cuda_v12`, `cuda_v13`, `rocm_v7_1` and `vulkan` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
-5. Start it again. `ollama --version` should report `0.32.14-thinkbudget`.
+5. Start it again. `ollama --version` should report `0.33.2-thinkbudget`.
 
 Keep a copy of the original binary and of the files you replace in `lib/ollama` — reverting is just putting them back.
 
@@ -90,6 +95,8 @@ OK, I have enough to answer now.
 ```
 
 A client that sends no `think` field still gets the model's own budget, which is the point of the Modelfile form — coding agents generally do not send one.
+
+One thing to know about the OpenAI-compatible endpoint. Upstream added `xhigh` and `ultra` as reasoning efforts and maps `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.33.2, which is the level doing what it says.
 
 ## Caveats
 
