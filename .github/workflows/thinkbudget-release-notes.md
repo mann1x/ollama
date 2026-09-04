@@ -2,18 +2,26 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**A malformed tool call no longer fails the request.** Two ways a qwen3-coder-style call could be rejected outright, both found by running the fork under a coding agent for a fortnight:
+Nothing new in the feature itself. This is the same thinking-budget work as the
+last test build, rebased onto Ollama **0.33.3** so it can be installed over the
+current release rather than over one you have to hold back.
 
-- A call that dropped its closing `</parameter>` came back as `expected element type <function>` and the whole request failed. The block is now repaired when the repair is unambiguous, and the call goes through.
-- A parameter whose *value* contained something that looks like markup — a snippet of HTML, an XML fragment, a shell redirect — was fed to the XML reader as markup and broke the parse. A value is text now, and is escaped as text.
+**The runtime moved again.** 0.33.2 vendored llama.cpp b10630; 0.33.3 vendors
+**b10760**. Both compat patches apply to it unchanged, verified against a fresh
+checkout of the tag, and the budget behaves exactly as it did — but the runtime
+in this release is not the one in the last one, so take the runtime archive as
+well as the binary. See Installing.
 
-When a call still cannot be read, it is handed back to the model as content instead of failing the turn. The model then sees what it emitted and can correct itself, which is what pressing Retry by hand was achieving anyway. An agent mid-turn has usually already run commands, so there is nothing safe to retry automatically and nothing useful to fail towards.
+What upstream brought that you may notice: image and audio input for Gemma 4,
+cached prompt tokens reported back on a response, and model-authored sampler
+defaults read out of the GGUF. That last one changes which numbers a request
+starts from — temperature, top_k, top_p, min_p, typical_p and the penalties can
+now come from the model itself, under anything a Modelfile or the request sets.
+It does not reach `num_predict` or the context length, so a budget written as
+an effort level resolves to the same number it did before.
 
-Otherwise the same feature set, rebuilt on Ollama **0.33.2**.
-
-**The runtime moved again.** 0.32.14 vendored llama.cpp b10434; 0.33.2 vendors **b10630**. Both compat patches apply to it unchanged and the budget behaves exactly as it did, but the runtime in this release is not the one in the last one — take the runtime archive as well as the binary, and see Installing.
-
-0.33.2 also changed how a parse error mid-stream is handled: the request now fails with a 500 instead of the completion callback wedging. That is upstream's fix and it is kept, but note that it is reached less often here, because of the repairs above.
+The tool-call repairs that were new last time — a dropped `</parameter>`, and a
+parameter value that looks like markup — are unchanged and still here.
 
 ## How the budget behaves
 
@@ -53,9 +61,9 @@ Four fixes found by running the budget under a real coding agent. Each is indepe
 
 ## Installing
 
-The binary is not enough on its own. Both behaviours described under *How the budget behaves* are in the budget sampler, which compiles into `lib/ollama` and not into the binary, so you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10434 to b10630, so the runtime in this release is not the one you already installed. See the top of these notes.
+The binary is not enough on its own. Both behaviours described under *How the budget behaves* are in the budget sampler, which compiles into `lib/ollama` and not into the binary, so you install both or you get the half that asks for behaviour the runtime does not have. Do not skip step 4 this time: the vendored llama.cpp moved from b10630 to b10760, so the runtime in this release is not the one you already installed. See the top of these notes.
 
-1. Install official Ollama **0.33.2** normally.
+1. Install official Ollama **0.33.3** normally.
 2. Stop it (quit the tray app / `systemctl stop ollama`).
 3. Replace the binary with the one from this release:
    - **Windows** — `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
@@ -66,7 +74,7 @@ The binary is not enough on its own. Both behaviours described under *How the bu
    - **Linux** — `sudo tar -C /usr/local/lib -xzf ollama-linux-amd64-runtime.tgz`, which replaces the files in `/usr/local/lib/ollama`. If your install put them elsewhere, unpack somewhere scratch and copy over that directory instead.
 
    Both archives hold the base runtime only — `llama-server`, `libllama-common`, `libllama`, `libmtmd`, `libllama-server-impl` and the `ggml-cpu-*` variants. Leave the `cuda_v12`, `cuda_v13`, `rocm_v7_1` and `vulkan` folders alone: the change is in the base set, and the backends reach it through ggml's C ABI, so your GPU acceleration is untouched.
-5. Start it again. `ollama --version` should report `0.33.2-thinkbudget`.
+5. Start it again. `ollama --version` should report `0.33.3-thinkbudget`.
 
 Keep a copy of the original binary and of the files you replace in `lib/ollama` — reverting is just putting them back.
 
@@ -96,7 +104,7 @@ OK, I have enough to answer now.
 
 A client that sends no `think` field still gets the model's own budget, which is the point of the Modelfile form — coding agents generally do not send one.
 
-One thing to know about the OpenAI-compatible endpoint. Upstream added `xhigh` and `ultra` as reasoning efforts and maps `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.33.2, which is the level doing what it says.
+One thing to know about the OpenAI-compatible endpoint. Upstream added `xhigh` and `ultra` as reasoning efforts and maps `minimal` onto `low`; here `minimal` keeps its own budget — a sixteenth of the response, where `low` is an eighth — and `xhigh`/`ultra` clamp to `max` as upstream does. A client that sends `minimal` therefore gets a smaller budget than it would on stock 0.33.3, which is the level doing what it says.
 
 ## Caveats
 
