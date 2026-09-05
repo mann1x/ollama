@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ollama/ollama/api"
@@ -1361,5 +1362,111 @@ func TestOverlapFunction(t *testing.T) {
 				t.Errorf("overlap(%q, %q) = %d, want %d", tc.s, tc.delim, got, tc.want)
 			}
 		})
+	}
+}
+
+// A model that gives up on a call part-way through and starts it again leaves
+// the abandoned attempt inside the value of a parameter it never closed, so the
+// block carries two `<function>` roots and does not unmarshal. Measured on one
+// agent session (2026-09-05, mann1x/cline#64): eight turns, and in every one
+// the count of `<tool_call>` openings inside the block matched the count of
+// `<parameter=` tags left unclosed. Each ended in a complete, balanced call, so
+// the model's last attempt is the call it meant to send -- and each of those
+// eight was discarded and returned to the model as text instead.
+func TestQwenToolCallRecoversRestartedCall(t *testing.T) {
+	cases := []struct {
+		name     string
+		raw      string
+		wantName string
+		wantArgs map[string]any
+	}{
+		{
+			name: "one restart, mid-parameter",
+			raw: "\n<function=editor>\n<parameter=end_line>\n90\n</parameter>\n" +
+				"<parameter=new_text>\n    sX(){return -1;}}\n" +
+				"\n<tool_call>\n<function=editor>\n" +
+				"<parameter=new_text>\n    sX(){return -1;}\n</parameter>\n" +
+				"<parameter=path>\ngame.html\n</parameter>\n</function>",
+			wantName: "editor",
+			wantArgs: map[string]any{
+				"new_text": "    sX(){return -1;}",
+				"path":     "game.html",
+			},
+		},
+		{
+			name: "restarted more than once",
+			raw: "\n<function=editor>\n<parameter=new_text>\nfirst draft\n" +
+				"\n<tool_call>\n<function=editor>\n<parameter=new_text>\nsecond draft\n" +
+				"\n<tool_call>\n<function=read_files>\n" +
+				"<parameter=files>\ngame.html\n</parameter>\n</function>",
+			wantName: "read_files",
+			wantArgs: map[string]any{"files": "game.html"},
+		},
+		{
+			name: "the last attempt is itself missing a closing tag",
+			// The two recoveries compose: the tail is taken first, and the
+			// repair that already existed closes what it left open.
+			raw: "\n<function=editor>\n<parameter=new_text>\nfirst draft\n" +
+				"\n<tool_call>\n<function=editor>\n" +
+				"<parameter=path>\ngame.html\n</function>",
+			wantName: "editor",
+			wantArgs: map[string]any{"path": "game.html"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseToolCall(qwenEventRawToolCall{raw: tc.raw}, []api.Tool{})
+			if err != nil {
+				t.Fatalf("parseToolCall: %v", err)
+			}
+			if got.Function.Name != tc.wantName {
+				t.Errorf("name: got %q, want %q", got.Function.Name, tc.wantName)
+			}
+			for key, want := range tc.wantArgs {
+				value, ok := got.Function.Arguments.Get(key)
+				if !ok {
+					t.Errorf("argument %q missing", key)
+					continue
+				}
+				if value != want {
+					t.Errorf("argument %q: got %q, want %q", key, value, want)
+				}
+			}
+			// The discarded drafts must not survive into the call. This is the
+			// property that separates taking the last attempt from merging the
+			// block: a merge would carry `first draft` into `new_text`.
+			for _, argument := range []string{"new_text", "path", "files"} {
+				if value, ok := got.Function.Arguments.Get(argument); ok {
+					if s, isString := value.(string); isString && strings.Contains(s, "draft") && !strings.Contains(s, "second draft") {
+						t.Errorf("argument %q kept a discarded draft: %q", argument, s)
+					}
+				}
+			}
+		})
+	}
+}
+
+// The guard on the recovery above: a value that legitimately contains the
+// opening tag, in a parameter the model closed properly, parses on the first
+// attempt and must come through untouched. Trimming to the last `<tool_call>`
+// here would throw away the call and keep a fragment of its own argument.
+func TestQwenToolCallKeepsAToolCallTagInsideAClosedParameter(t *testing.T) {
+	value := "A call opens with <tool_call> and closes with </tool_call>."
+	raw := "<function=editor>\n<parameter=new_text>\n" + value + "\n</parameter>\n" +
+		"<parameter=path>\nnotes.md\n</parameter>\n</function>"
+
+	got, err := parseToolCall(qwenEventRawToolCall{raw: raw}, []api.Tool{})
+	if err != nil {
+		t.Fatalf("parseToolCall: %v", err)
+	}
+	if name := got.Function.Name; name != "editor" {
+		t.Fatalf("name: got %q, want %q", name, "editor")
+	}
+	if value_, _ := got.Function.Arguments.Get("new_text"); value_ != value {
+		t.Errorf("new_text: got %q, want %q", value_, value)
+	}
+	if path, _ := got.Function.Arguments.Get("path"); path != "notes.md" {
+		t.Errorf("path: got %q, want %q", path, "notes.md")
 	}
 }
