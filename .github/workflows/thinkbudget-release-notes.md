@@ -2,9 +2,31 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-Nothing new in the feature itself. This is the same thinking-budget work as the
-last test build, rebased onto Ollama **0.33.3** so it can be installed over the
-current release rather than over one you have to hold back.
+**A restarted tool call is no longer a failed one.** A model that gives up on a
+call part-way through and starts it again leaves the abandoned attempt inside
+the value of a parameter it never closed. The block then carries two
+`<function>` roots, the XML does not parse, and the whole thing goes back to the
+model as content — a turn spent and nothing run.
+
+Measured on one agent session: eight such turns in a single run, 526s and
+16,552 output tokens, one discarded transaction, and the raw block left standing
+as the run's completion message. The shape is not a guess. In every one of the
+eight, the number of `<tool_call>` openings inside the block matched the number
+of `<parameter=` tags left unclosed — one restart per abandoned parameter — and
+every one ended in a complete, balanced call. All eight now parse, to the call
+the model finished.
+
+The last `<tool_call>` is where the model started over, so what follows it is
+taken and what precedes it is dropped. Taking the tail rather than merging the
+block is the point: a merge would carry the abandoned fragment into the very
+parameter it was abandoned in, and write it to a file. It is only reached once
+the block as sent has already failed, so a parameter whose value legitimately
+contains `<tool_call>` and which the model closed properly parses first and is
+never touched.
+
+Otherwise this is the same thinking-budget work as the last test build, rebased
+onto Ollama **0.33.3** so it can be installed over the current release rather
+than over one you have to hold back.
 
 **The runtime moved again.** 0.33.2 vendored llama.cpp b10630; 0.33.3 vendors
 **b10760**. Both compat patches apply to it unchanged, verified against a fresh
@@ -20,8 +42,11 @@ now come from the model itself, under anything a Modelfile or the request sets.
 It does not reach `num_predict` or the context length, so a budget written as
 an effort level resolves to the same number it did before.
 
-The tool-call repairs that were new last time — a dropped `</parameter>`, and a
-parameter value that looks like markup — are unchanged and still here.
+The tool-call repairs from earlier builds — a dropped `</parameter>`, and a
+parameter value that looks like markup — are unchanged and still here. The
+restart recovery above composes with the first of them, because the two defects
+arrive together: the turn that restarts a call under long context is the turn
+that has also stopped closing its tags.
 
 ## How the budget behaves
 
