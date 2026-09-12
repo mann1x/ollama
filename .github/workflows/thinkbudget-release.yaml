@@ -337,9 +337,13 @@ jobs:
           npm run build
           test -s dist/index.html
           ls -la dist
-      - name: go generate
-        working-directory: repo
-        run: go generate ./...
+      # No `go generate ./...` here, deliberately. Its two directives in
+      # app/ui are the tscriptify run that writes app/codegen/gotypes.gen.ts --
+      # a file that is committed, and that the test workflow verifies is
+      # current on every push -- and the npm build the step above already did.
+      # Running it needs `go install tscriptify` first (it is not on the
+      # runner: "executable file not found in %PATH%") and would regenerate a
+      # file this job has no business rewriting.
       # -H windowsgui: without it the tray app opens a console window behind
       # itself on every launch.
       - name: build
