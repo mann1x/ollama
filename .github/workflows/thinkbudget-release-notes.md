@@ -31,7 +31,10 @@ clears it, and every path that applies it — the tray's "Restart to update", th
 upgrade at startup — went ahead without consulting the setting. A machine with
 the setting off was silently upgraded here on 2026-09-12.
 
-So this release ships **`ollama app.exe`** (Windows) with three changes:
+So this release ships the desktop app (Windows) with three changes. It is
+attached as **`ollama-app-windows-amd64.exe`** and must be renamed to
+**`ollama app.exe`** when you copy it in -- GitHub rewrites spaces in asset
+names, so it cannot be attached under the name it has to be installed under:
 
 - The update check asks **this fork's releases**, not `ollama.com`. Since these
   releases carry a binary and the runtime rather than an installer, the honest

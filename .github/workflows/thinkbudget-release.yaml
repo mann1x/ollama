@@ -380,9 +380,17 @@ jobs:
           grep -qa "repos/mann1x/ollama/releases" "ollama app.exe" \
             || { echo "::error::ollama app.exe does not name the fork's releases endpoint"; exit 1; }
           echo "update check points at the fork"
+      # Uploaded under a hyphenated name because GitHub rewrites spaces in
+      # asset names to dots: "ollama app.exe" arrives as "ollama.app.exe",
+      # which matches nothing the install expects and which a tester would
+      # have to guess at. Named explicitly here, and the notes say what to
+      # rename it to. The build above keeps the real name so the two guards
+      # read the file they are guarding.
       - name: attach to the release
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" "ollama app.exe" --clobber
+        run: |
+          cp "ollama app.exe" ollama-app-windows-amd64.exe
+          gh release upload "${{ inputs.tag }}" ollama-app-windows-amd64.exe --clobber
 
   checksums:
     needs: [build, windows-runtime, linux-runtime, windows-app]
