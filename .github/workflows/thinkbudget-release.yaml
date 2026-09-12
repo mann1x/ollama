@@ -308,8 +308,80 @@ jobs:
         working-directory: repo
         run: gh release upload "${{ inputs.tag }}" ollama-linux-amd64-runtime.tgz --clobber
 
+  # The tray app, which is the half that decides whether this install replaces
+  # itself. Stock `ollama app.exe` checks ollama.com, is offered the official
+  # release, and installs it -- replacing the binary that has the budget with
+  # one that does not. Measured on eleven2go 2026-09-10: offered from 09:10,
+  # installed at 12:12, and the server it left behind did not start at all. A
+  # tester who keeps the stock app keeps that behaviour no matter what binary
+  # they drop next to it, so the app is built here too.
+  #
+  # It is unsigned, so Windows SmartScreen will warn on first run. That is the
+  # cost of not shipping an installer, and the notes say so.
+  windows-app:
+    needs: prepare
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      # app/ui/app.go carries `//go:embed app/dist`, and embed fails the build
+      # outright when the directory does not exist -- "pattern app/dist: no
+      # matching files found". The React app has to be built before Go is run.
+      - name: build the web ui
+        working-directory: repo/app/ui/app
+        run: |
+          npm ci || npm install
+          npm run build
+          test -s dist/index.html
+          ls -la dist
+      - name: go generate
+        working-directory: repo
+        run: go generate ./...
+      # -H windowsgui: without it the tray app opens a console window behind
+      # itself on every launch.
+      - name: build
+        working-directory: repo
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -H windowsgui -extldflags=-static -X=github.com/ollama/ollama/app/version.Version=${{ inputs.version }}" \
+            -o "ollama app.exe" ./app/cmd/app/
+          ls -la "ollama app.exe"
+      - name: no third-party DLL imports
+        working-directory: repo
+        run: |
+          bad=0
+          for dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll libgomp-1.dll; do
+            if grep -qa "$dll" "ollama app.exe"; then
+              echo "::error::ollama app.exe still references $dll; it will not load on a clean Windows install"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] && echo "no third-party DLL references found"
+          exit "$bad"
+      # The point of shipping this at all. If the built app still names
+      # ollama.com, it will still replace this install with a stock one, and
+      # the release is worse than useless -- it looks like protection.
+      - name: it asks the fork, not ollama.com
+        working-directory: repo
+        run: |
+          if grep -qa "ollama.com/api/update" "ollama app.exe"; then
+            echo "::error::ollama app.exe still points its update check at ollama.com"
+            exit 1
+          fi
+          grep -qa "repos/mann1x/ollama/releases" "ollama app.exe" \
+            || { echo "::error::ollama app.exe does not name the fork's releases endpoint"; exit 1; }
+          echo "update check points at the fork"
+      - name: attach to the release
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" "ollama app.exe" --clobber
+
   checksums:
-    needs: [build, windows-runtime, linux-runtime]
+    needs: [build, windows-runtime, linux-runtime, windows-app]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -319,7 +391,9 @@ jobs:
         working-directory: repo
         run: |
           mkdir -p dist && cd dist
-          gh release download "${{ inputs.tag }}" --pattern 'ollama-*' --clobber
-          sha256sum ollama-* > sha256sum.txt
+          # 'ollama*', not 'ollama-*': the tray app is "ollama app.exe", with a
+          # space and no hyphen, and a hyphenated glob leaves it unchecksummed.
+          gh release download "${{ inputs.tag }}" --pattern 'ollama*' --clobber
+          sha256sum ollama* > sha256sum.txt
           cat sha256sum.txt
           gh release upload "${{ inputs.tag }}" sha256sum.txt --clobber
