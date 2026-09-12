@@ -210,6 +210,18 @@ func main() {
 	}
 	appStore = st
 
+	// Teach the updater whose consent to ask for. Every path that applies a
+	// staged installer runs through getStagedUpdate, which has no store of its
+	// own; without this it cannot tell a machine that has declined updates from
+	// one that has not, and applies the bundle either way.
+	updater.AutoUpdateAllowed = func() (bool, error) {
+		settings, err := st.Settings()
+		if err != nil {
+			return false, err
+		}
+		return settings.AutoUpdateEnabled, nil
+	}
+
 	// Enable CORS in development mode
 	if devMode {
 		os.Setenv("OLLAMA_CORS", "1")
@@ -403,8 +415,14 @@ func startHiddenTasks() {
 			// Check if auto-update is enabled before automatically upgrading
 			settings, err := appStore.Settings()
 			if err != nil {
-				slog.Warn("failed to load settings for upgrade check", "error", err)
-			} else if !settings.AutoUpdateEnabled {
+				// Settings that cannot be read are not permission to upgrade.
+				// Falling through here is how one unreadable database turns
+				// into a silent replacement of the running build.
+				slog.Warn("failed to load settings for upgrade check; not upgrading", "error", err)
+				UpdateAvailable("")
+				return
+			}
+			if !settings.AutoUpdateEnabled {
 				slog.Info("auto-update disabled, skipping automatic upgrade at startup")
 				// Still show tray notification so user knows update is ready
 				UpdateAvailable("")
