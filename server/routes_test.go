@@ -25,7 +25,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/go-cmp/cmp"
 	"github.com/ollama/ollama/api"
-	"github.com/ollama/ollama/fs/ggml"
+	"github.com/ollama/ollama/fs/gguf"
+	gguftest "github.com/ollama/ollama/internal/testutil/gguf"
 	"github.com/ollama/ollama/manifest"
 	"github.com/ollama/ollama/model/parsers"
 	"github.com/ollama/ollama/openai"
@@ -77,9 +78,11 @@ func createTestFile(t *testing.T, name string) (string, string) {
 		t.Fatal(err)
 	}
 
-	if err := createLink(f.Name(), filepath.Join(modelDir, "blobs", fmt.Sprintf("sha256-%s", strings.TrimPrefix(digest, "sha256:")))); err != nil {
+	blobPath, err := manifest.BlobsPath(digest)
+	if err != nil {
 		t.Fatal(err)
 	}
+	linkOrCopyTestBlob(t, f.Name(), blobPath)
 
 	return f.Name(), digest
 }
@@ -96,11 +99,7 @@ func TestRoutes(t *testing.T) {
 		Expected func(t *testing.T, resp *http.Response)
 	}
 
-	s := &Server{modelCaches: &modelCaches{modelList: newModelListCache()}}
-	s.modelCaches.modelList.Start(context.Background())
-	if err := s.modelCaches.modelList.Wait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	s := &Server{}
 
 	createTestModel := func(t *testing.T, name string) {
 		t.Helper()
@@ -123,20 +122,16 @@ func TestRoutes(t *testing.T) {
 
 		modelName := model.ParseName(name)
 
-		baseLayers, err := ggufLayers(digest, "test.gguf", fn)
+		baseLayers, err := ggufLayersWithMediaType(digest, "test.gguf", "", fn)
 		if err != nil {
 			t.Fatalf("failed to create model: %v", err)
 		}
 
-		config := &model.ConfigV2{
-			OS:           "linux",
-			Architecture: "amd64",
-		}
+		config := new(model.ConfigV2)
 
-		if err := createModel(r, modelName, baseLayers, config, fn); err != nil {
+		if err := createModel(t.Context(), r, modelName, baseLayers, config, fn); err != nil {
 			t.Fatal(err)
 		}
-		s.refreshModelListCache(modelName)
 	}
 
 	testCases := []testCase{
@@ -563,9 +558,9 @@ func TestGetModelInfo_SafetensorsUsesStoredFileType(t *testing.T) {
 func TestGetModelInfoRepairsUnknownGGUFFileType(t *testing.T) {
 	t.Setenv("OLLAMA_MODELS", t.TempDir())
 
-	_, digest := createBinFile(t, ggml.KV{
+	_, digest := createBinFile(t, gguftest.KV{
 		"general.architecture": "llama",
-		"general.file_type":    uint32(ggml.FileTypeQ4_K_M),
+		"general.file_type":    uint32(gguf.FileTypeQ4_K_M),
 	}, nil)
 	modelLayer, err := manifest.NewLayerFromLayer(digest, "application/vnd.ollama.image.model", "")
 	if err != nil {
@@ -775,8 +770,8 @@ func TestShow(t *testing.T) {
 
 	var s Server
 
-	_, digest1 := createBinFile(t, ggml.KV{"general.architecture": "test"}, nil)
-	_, digest2 := createBinFile(t, ggml.KV{"general.type": "projector", "general.architecture": "clip"}, nil)
+	_, digest1 := createBinFile(t, gguftest.KV{"general.architecture": "test"}, nil)
+	_, digest2 := createBinFile(t, gguftest.KV{"general.type": "projector", "general.architecture": "clip"}, nil)
 
 	createRequest(t, s.CreateHandler, api.CreateRequest{
 		Name:  "show-model",
@@ -805,13 +800,173 @@ func TestShow(t *testing.T) {
 	}
 }
 
+// showWithOptions creates a model with the given Modelfile parameters and asks
+// /api/show about it, optionally overriding options the way a caller does when
+// it wants the budget for the request it is about to send.
+func showWithOptions(t *testing.T, s *Server, digest, name string, parameters, options map[string]any) api.ShowResponse {
+	t.Helper()
+	return showWithThink(t, s, digest, name, parameters, options, nil)
+}
+
+// showWithThink additionally asks about the think value the caller intends to
+// send, which is what a client setting the level itself has to ask about.
+func showWithThink(t *testing.T, s *Server, digest, name string, parameters, options map[string]any, think *api.ThinkValue) api.ShowResponse {
+	t.Helper()
+	createRequest(t, s.CreateHandler, api.CreateRequest{
+		Name:       name,
+		Files:      map[string]string{"model.gguf": digest},
+		Parameters: parameters,
+	})
+
+	w := createRequest(t, s.ShowHandler, api.ShowRequest{Name: name, Options: options, Think: think})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status code 200, actual %d", w.Code)
+	}
+
+	var resp api.ShowResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestShowThinkBudget(t *testing.T) {
+	t.Setenv("OLLAMA_MODELS", t.TempDir())
+
+	var s Server
+
+	_, digest := createBinFile(t, gguftest.KV{"general.architecture": "test"}, nil)
+
+	show := func(t *testing.T, name string, parameters map[string]any) api.ShowResponse {
+		t.Helper()
+		return showWithOptions(t, &s, digest, name, parameters, nil)
+	}
+
+	t.Run("answers for a think level the caller intends to send", func(t *testing.T) {
+		// The common case: the client sets the level, and the model carries no
+		// think_budget parameter at all. Without the think value there is
+		// nothing here to resolve and the caller is back to guessing.
+		resp := showWithThink(t, &s, digest, "show-think-request-level",
+			map[string]any{"num_ctx": 32768}, map[string]any{"num_predict": 8000},
+			&api.ThinkValue{Value: "medium"})
+
+		if resp.ThinkBudget == nil || resp.ThinkBudget.Value != "medium" {
+			t.Fatalf("expected think budget %q, got %#v", "medium", resp.ThinkBudget)
+		}
+		if resp.ThinkBudgetTokens != 2000 {
+			t.Errorf("expected think budget tokens 2000, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("lets the request's think value win over the model parameter", func(t *testing.T) {
+		// Same precedence as a completion: a think value carrying its own
+		// budget beats the model's. An answer that disagreed with the
+		// completion path would be worse than no answer.
+		resp := showWithThink(t, &s, digest, "show-think-precedence",
+			map[string]any{"think_budget": "minimal", "num_ctx": 32768}, nil,
+			&api.ThinkValue{Value: "high"})
+
+		if resp.ThinkBudget == nil || resp.ThinkBudget.Value != "high" {
+			t.Fatalf("expected think budget %q, got %#v", "high", resp.ThinkBudget)
+		}
+		if resp.ThinkBudgetTokens != 16384 {
+			t.Errorf("expected think budget tokens 16384, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("falls back to the model parameter when think carries no budget", func(t *testing.T) {
+		// `think: true` means unbounded, not "no budget", so the model's own
+		// parameter is still what applies.
+		resp := showWithThink(t, &s, digest, "show-think-unbounded",
+			map[string]any{"think_budget": "medium", "num_ctx": 32768}, nil,
+			&api.ThinkValue{Value: true})
+
+		if resp.ThinkBudget == nil || resp.ThinkBudget.Value != "medium" {
+			t.Fatalf("expected think budget %q, got %#v", "medium", resp.ThinkBudget)
+		}
+		if resp.ThinkBudgetTokens != 8192 {
+			t.Errorf("expected think budget tokens 8192, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("resolves against the options the caller intends to send", func(t *testing.T) {
+		// A client that overrides num_predict gets the budget for its own
+		// request, so it never has to re-derive one from a fraction table it
+		// would have to keep in step with the server.
+		resp := showWithOptions(t, &s, digest, "show-think-request-options",
+			map[string]any{"think_budget": "medium", "num_ctx": 32768},
+			map[string]any{"num_predict": 8000})
+
+		if resp.ThinkBudgetTokens != 2000 {
+			t.Errorf("expected think budget tokens 2000, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("resolves a level against the model's own window", func(t *testing.T) {
+		// The parameter already appears in Parameters as a line of text; the
+		// point of the field is that the level alone says nothing about the
+		// tokens it stands for.
+		resp := show(t, "show-think-level", map[string]any{
+			"think_budget": "medium",
+			"num_ctx":      32768,
+		})
+
+		if resp.ThinkBudget == nil || resp.ThinkBudget.Value != "medium" {
+			t.Fatalf("expected think budget %q, got %#v", "medium", resp.ThinkBudget)
+		}
+		if resp.ThinkBudgetTokens != 8192 {
+			t.Errorf("expected think budget tokens 8192, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("divides num_predict when the model caps the response", func(t *testing.T) {
+		resp := show(t, "show-think-predict", map[string]any{
+			"think_budget": "medium",
+			"num_ctx":      32768,
+			"num_predict":  8000,
+		})
+
+		if resp.ThinkBudgetTokens != 2000 {
+			t.Errorf("expected think budget tokens 2000, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+
+	t.Run("reports a fixed count as both the value and the count", func(t *testing.T) {
+		resp := show(t, "show-think-fixed", map[string]any{
+			"think_budget": 4096,
+			"num_ctx":      32768,
+		})
+
+		if resp.ThinkBudgetTokens != 4096 {
+			t.Errorf("expected think budget tokens 4096, got %d", resp.ThinkBudgetTokens)
+		}
+		if resp.ThinkBudget == nil {
+			t.Fatalf("expected a think budget value, got nil")
+		}
+		if got := fmt.Sprintf("%v", resp.ThinkBudget.Value); got != "4096" {
+			t.Errorf("expected think budget %q, got %q", "4096", got)
+		}
+	})
+
+	t.Run("says nothing when the model carries no budget", func(t *testing.T) {
+		resp := show(t, "show-think-none", map[string]any{"num_ctx": 32768})
+
+		if resp.ThinkBudget != nil {
+			t.Errorf("expected no think budget, got %#v", resp.ThinkBudget)
+		}
+		if resp.ThinkBudgetTokens != 0 {
+			t.Errorf("expected no think budget tokens, got %d", resp.ThinkBudgetTokens)
+		}
+	})
+}
+
 func TestShowTemplateUsesSelectedRuntimeTemplate(t *testing.T) {
 	t.Setenv("OLLAMA_MODELS", t.TempDir())
 	t.Setenv("OLLAMA_GO_TEMPLATE", "")
 
 	chatTemplate := "{% if tools %}{{ tools }}{% endif %}{% set content = (content.split('</think>')|last) %}"
 	goTemplate := "{{ range .Messages }}{{ if .Thinking }}<think>{{ .Thinking }}</think>{{ end }}{{ .Content }}{{ end }}"
-	_, digest := createBinFile(t, ggml.KV{
+	_, digest := createBinFile(t, gguftest.KV{
 		"general.architecture":    "llama",
 		"tokenizer.chat_template": chatTemplate,
 	}, nil)
@@ -1393,7 +1548,7 @@ func TestThinkBudgetForCompletion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			budget, start, end := thinkBudgetForCompletion(tt.parser, tt.templateStart, tt.templateEnd, tt.think, tt.opts)
+			budget, _, start, end := thinkBudgetForCompletion(tt.parser, tt.templateStart, tt.templateEnd, tt.think, tt.opts)
 			if budget != tt.wantBudget {
 				t.Errorf("budget = %d, want %d", budget, tt.wantBudget)
 			}
@@ -1413,7 +1568,7 @@ func TestThinkBudgetForCompletionHarmony(t *testing.T) {
 
 	opts := &api.Options{Runner: api.Runner{NumCtx: 32768}}
 
-	budget, start, end := thinkBudgetForCompletion(harmonyParser, "", "", &api.ThinkValue{Value: "high"}, opts)
+	budget, _, start, end := thinkBudgetForCompletion(harmonyParser, "", "", &api.ThinkValue{Value: "high"}, opts)
 	if budget != 16384 {
 		t.Errorf("budget = %d, want 16384", budget)
 	}
@@ -1426,7 +1581,7 @@ func TestThinkBudgetForCompletionHarmony(t *testing.T) {
 		t.Errorf("end tag = %q, want %q", end, "<|end|>")
 	}
 
-	if budget, _, _ := thinkBudgetForCompletion(harmonyParser, "", "", &api.ThinkValue{Value: true}, opts); budget != 0 {
+	if budget, _, _, _ := thinkBudgetForCompletion(harmonyParser, "", "", &api.ThinkValue{Value: true}, opts); budget != 0 {
 		t.Errorf("think true budget = %d, want 0 (unrestricted)", budget)
 	}
 }

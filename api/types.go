@@ -542,6 +542,23 @@ type ChatResponse struct {
 	// DoneReason is the reason the model stopped generating text.
 	DoneReason string `json:"done_reason,omitempty"`
 
+	// ThinkBudget is the budget that applied, in the form it was written: a
+	// level such as "medium", or a token count. It is the request's think
+	// value when that carried a budget, and the model's own `think_budget`
+	// parameter otherwise — which is a budget the caller never sent and has no
+	// other way to learn from the wire.
+	ThinkBudget *ThinkValue `json:"think_budget,omitempty"`
+
+	// ThinkBudgetTokens is what that budget resolved to for this request.
+	//
+	// A level is a share of the room the response has — `min(num_predict,
+	// num_ctx)` — so it names a different number on every request as the
+	// prompt grows, and no client can work it out from the level alone.
+	// Reporting it is what lets a caller tell the model what it is actually
+	// working within, and tell a truncated answer caused by a thinking bound
+	// apart from one caused by the response cap.
+	ThinkBudgetTokens int `json:"think_budget_tokens,omitempty"`
+
 	DebugInfo *DebugInfo `json:"_debug_info,omitempty"`
 
 	// Logprobs contains log probability information for the generated tokens,
@@ -558,12 +575,13 @@ type DebugInfo struct {
 }
 
 type Metrics struct {
-	TotalDuration      time.Duration `json:"total_duration,omitempty"`
-	LoadDuration       time.Duration `json:"load_duration,omitempty"`
-	PromptEvalCount    int           `json:"prompt_eval_count,omitempty"`
-	PromptEvalDuration time.Duration `json:"prompt_eval_duration,omitempty"`
-	EvalCount          int           `json:"eval_count,omitempty"`
-	EvalDuration       time.Duration `json:"eval_duration,omitempty"`
+	TotalDuration         time.Duration `json:"total_duration,omitempty"`
+	LoadDuration          time.Duration `json:"load_duration,omitempty"`
+	PromptEvalCount       int           `json:"prompt_eval_count,omitempty"`
+	PromptEvalCachedCount *int          `json:"prompt_eval_cached_count,omitempty"`
+	PromptEvalDuration    time.Duration `json:"prompt_eval_duration,omitempty"`
+	EvalCount             int           `json:"eval_count,omitempty"`
+	EvalDuration          time.Duration `json:"eval_duration,omitempty"`
 }
 
 // Options specified in [GenerateRequest].  If you add a new option here, also
@@ -578,7 +596,7 @@ type Options struct {
 	TopK             int      `json:"top_k,omitempty"`
 	TopP             float32  `json:"top_p,omitempty"`
 	MinP             float32  `json:"min_p,omitempty"`
-	TypicalP         float32  `json:"typical_p,omitempty"`
+	TypicalP         float32  `json:"typical_p,omitempty"` // Deprecated: rejected on new requests and models; still honored from existing model parameters
 	RepeatLastN      int      `json:"repeat_last_n,omitempty"`
 	Temperature      float32  `json:"temperature,omitempty"`
 	RepeatPenalty    float32  `json:"repeat_penalty,omitempty"`
@@ -671,10 +689,10 @@ type CreateRequest struct {
 	// Stream specifies whether the response is streaming; it is true by default.
 	Stream *bool `json:"stream,omitempty"`
 
-	// Quantize is the quantization format for the model; leave blank to not change the quantization level.
+	// Quantize is the quantization format to apply when importing safetensors weights.
 	Quantize string `json:"quantize,omitempty"`
 
-	// DraftQuantize is the quantization format for the draft model.
+	// DraftQuantize is the quantization format to apply when importing safetensors draft weights.
 	DraftQuantize string `json:"draft_quantize,omitempty"`
 
 	// From is the name of the model or file to use as the source.
@@ -683,13 +701,15 @@ type CreateRequest struct {
 	// RemoteHost is the URL of the upstream ollama API for the model (if any).
 	RemoteHost string `json:"remote_host,omitempty"`
 
-	// Files is a map of files include when creating the model.
+	// Files maps source file names to their SHA-256 digests.
 	Files map[string]string `json:"files,omitempty"`
 
-	// DraftFiles is a map of draft model files to include when creating the model.
+	// DraftFiles maps draft source file names to their SHA-256 digests.
 	DraftFiles map[string]string `json:"draft_files,omitempty"`
 
 	// Adapters is a map of LoRA adapters to include when creating the model.
+	//
+	// Deprecated: LoRA adapters are no longer supported.
 	Adapters map[string]string `json:"adapters,omitempty"`
 
 	// Template is the template used when constructing a request to the model.
@@ -744,6 +764,14 @@ type ShowRequest struct {
 
 	Options map[string]any `json:"options"`
 
+	// Think is the think value the caller intends to send, used only to report
+	// the budget it would produce. A level carries a budget of its own and
+	// takes precedence over the model's `think_budget` parameter, exactly as it
+	// does on a completion — so without it this endpoint can only answer for a
+	// model that happens to carry a parameter, and answers nothing for the
+	// common case of a caller that sets the level itself.
+	Think *ThinkValue `json:"think,omitempty"`
+
 	// Deprecated: set the model name with Model instead
 	Name string `json:"name"`
 }
@@ -767,6 +795,18 @@ type ShowResponse struct {
 	Capabilities  []model.Capability `json:"capabilities,omitempty"`
 	ModifiedAt    time.Time          `json:"modified_at,omitempty"`
 	Requires      string             `json:"requires,omitempty"`
+
+	// ThinkBudget is the model's own `think_budget` parameter, in the form it
+	// was written. It also appears in Parameters, but only as a line of text a
+	// caller would have to parse; naming it here matches the field on
+	// [ChatResponse] and [GenerateResponse] so one name means one thing across
+	// the API.
+	ThinkBudget *ThinkValue `json:"think_budget,omitempty"`
+
+	// ThinkBudgetTokens is what that budget resolves to against the model's
+	// own `num_predict` and `num_ctx`. A request that sets either will resolve
+	// to a different number, which is why the responses report their own.
+	ThinkBudgetTokens int `json:"think_budget_tokens,omitempty"`
 }
 
 // CopyRequest is the request passed to [Client.Copy].
@@ -815,17 +855,46 @@ type ListResponse struct {
 
 // ModelRecommendationsResponse is the response from [Client.ModelRecommendationsExperimental].
 type ModelRecommendationsResponse struct {
-	Recommendations []ModelRecommendation `json:"recommendations"`
+	Recommendations []ModelRecommendation        `json:"recommendations"`
+	Mappings        *ModelRecommendationMappings `json:"mappings,omitempty"`
 }
+
+// ModelRecommendationMapping defines one app-specific route preference.
+type ModelRecommendationMapping struct {
+	Model        string `json:"model"`
+	RequiredPlan string `json:"required_plan,omitempty"`
+}
+
+// ModelRecommendationMappings defines the app-specific model routes.
+type ModelRecommendationMappings map[string]ModelRecommendationMapping
 
 // ModelRecommendation is a single recommendation entry in [ModelRecommendationsResponse].
 type ModelRecommendation struct {
-	Model           string `json:"model"`
-	Description     string `json:"description"`
-	ContextLength   int    `json:"context_length,omitempty"`
-	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
-	VRAMBytes       int64  `json:"vram_bytes,omitempty"`
-	RequiredPlan    string `json:"required_plan,omitempty"`
+	Model           string                       `json:"model"`
+	Description     string                       `json:"description"`
+	ContextLength   int                          `json:"context_length,omitempty"`
+	MaxOutputTokens int                          `json:"max_output_tokens,omitempty"`
+	VRAMBytes       int64                        `json:"vram_bytes,omitempty"`
+	RequiredPlan    string                       `json:"required_plan,omitempty"`
+	Thinking        *ModelRecommendationThinking `json:"thinking,omitempty"`
+}
+
+// ModelRecommendationThinking advertises the exact values accepted by
+// Ollama's think field and the model's default. Values may be booleans for
+// binary thinking controls or strings for adjustable effort levels.
+type ModelRecommendationThinking struct {
+	Values  []any `json:"values,omitempty"`
+	Default any   `json:"default,omitempty"`
+}
+
+// Clone returns an independent copy.
+func (t *ModelRecommendationThinking) Clone() *ModelRecommendationThinking {
+	if t == nil {
+		return nil
+	}
+	clone := *t
+	clone.Values = append([]any(nil), t.Values...)
+	return &clone
 }
 
 // ProcessResponse is the response from [Client.Process].
@@ -933,6 +1002,14 @@ type GenerateResponse struct {
 	// can be sent in the next request to keep a conversational memory.
 	Context []int `json:"context,omitempty"`
 
+	// ThinkBudget is the budget that applied, in the form it was written. See
+	// the field of the same name on [ChatResponse].
+	ThinkBudget *ThinkValue `json:"think_budget,omitempty"`
+
+	// ThinkBudgetTokens is what that budget resolved to for this request. See
+	// the field of the same name on [ChatResponse].
+	ThinkBudgetTokens int `json:"think_budget_tokens,omitempty"`
+
 	Metrics
 
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
@@ -988,9 +1065,18 @@ func (m *Metrics) Summary() {
 		fmt.Fprintf(os.Stderr, "prompt eval count:    %d token(s)\n", m.PromptEvalCount)
 	}
 
+	cached := 0
+	if m.PromptEvalCachedCount != nil {
+		cached = *m.PromptEvalCachedCount
+	}
+	if cached > 0 {
+		fmt.Fprintf(os.Stderr, "prompt eval cached:   %d token(s)\n", cached)
+	}
+
 	if m.PromptEvalDuration > 0 {
 		fmt.Fprintf(os.Stderr, "prompt eval duration: %s\n", m.PromptEvalDuration)
-		fmt.Fprintf(os.Stderr, "prompt eval rate:     %.2f tokens/s\n", float64(m.PromptEvalCount)/m.PromptEvalDuration.Seconds())
+		uncached := max(0, m.PromptEvalCount-cached)
+		fmt.Fprintf(os.Stderr, "prompt eval rate:     %.2f tokens/s\n", float64(uncached)/m.PromptEvalDuration.Seconds())
 	}
 
 	if m.EvalCount > 0 {
@@ -1136,7 +1222,7 @@ func DefaultOptions() Options {
 		TopP:             0.9,
 		TypicalP:         1.0,
 		RepeatLastN:      64,
-		RepeatPenalty:    1.1,
+		RepeatPenalty:    1.0,
 		PresencePenalty:  0.0,
 		FrequencyPenalty: 0.0,
 		Seed:             -1,

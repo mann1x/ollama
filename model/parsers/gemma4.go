@@ -28,6 +28,9 @@ const (
 	gemma4ToolCallCloseTag = "<tool_call|>"
 	gemma4ToolResponseTag  = "<|tool_response>"
 	gemma4StringDelimiter  = `<|"|>`
+	// The channel this parser treats as thinking, as the model names it after
+	// the opening tag.
+	gemma4ThinkingChannelName = "thought"
 )
 
 var gemma4QuotedStringRe = regexp.MustCompile(`(?s)<\|"\|>(.*?)<\|"\|>`)
@@ -40,6 +43,11 @@ type Gemma4Parser struct {
 	hasThinkingSupport    bool
 	thinkingEnabled       bool // true when both model supports and user requested thinking
 	needsChannelNameStrip bool // true when we just entered thinking and need to strip "thought\n"
+	// True immediately after a thinking block closed. A block closed by the
+	// reasoning-budget sampler is closed between the model's <|channel> token
+	// and the "thought\n" header it was about to write, so that header arrives
+	// with the block already over and would otherwise be emitted as the answer.
+	strayChannelName bool
 }
 
 func (p *Gemma4Parser) HasToolSupport() bool {
@@ -57,6 +65,12 @@ func (p *Gemma4Parser) HasThinkingSupport() bool {
 // be split differently by the tokenizer, so the budget always engages.
 func (p *Gemma4Parser) ThinkingTags() (string, string) {
 	return gemma4ThinkingOpenTag, gemma4ThinkingCloseTag
+}
+
+// ToolCallTags reports the delimiters of this parser's tool calls, so a
+// response-wide thinking budget can forgive what was spent getting to one.
+func (p *Gemma4Parser) ToolCallTags() (string, string) {
+	return gemma4ToolCallOpenTag, gemma4ToolCallCloseTag
 }
 
 func (p *Gemma4Parser) PreservedTokens() []string {
@@ -186,6 +200,49 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 	switch p.state {
 	case Gemma4CollectingContent:
+		// A channel header orphaned by the block closing under it.
+		//
+		// The reasoning-budget sampler forces its message and the closing tag
+		// the moment the budget is gone, and the moment it can see the budget
+		// is gone is the model's <|channel> token -- before the "thought\n"
+		// header that follows it has been written. The model writes it anyway,
+		// into a block that is already closed, and it reads on screen as the
+		// word "thought" sitting after the budget message. Measured live on
+		// gemma4 with a 16,000-token budget.
+		if p.strayChannelName {
+			// The header and the closing tag are both orphans of the same event
+			// and arrive in either order, so they are stripped in a loop rather
+			// than once each. A turn cut at the *output cap* rather than at the
+			// budget leaves the tag behind as well: the sampler had already
+			// forced its message and closed the block, and the model's own
+			// <channel|> lands afterwards, in content, where it reads as the
+			// literal tag in the middle of an answer. Measured live twice on
+			// 2026-08-09 against a runtime that already dropped the bare header.
+			for {
+				trimmed := strings.TrimLeftFunc(bufStr, unicode.IsSpace)
+				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingCloseTag); ok {
+					bufStr = stripped
+					continue
+				}
+				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingChannelName); ok {
+					bufStr = stripped
+					continue
+				}
+				// Split across chunks: a prefix of either orphan now, the rest
+				// next. Waiting is only safe while more is coming.
+				if !done && trimmed != "" &&
+					(strings.HasPrefix(gemma4ThinkingCloseTag, trimmed) ||
+						strings.HasPrefix(gemma4ThinkingChannelName, trimmed)) {
+					return events, false
+				}
+				bufStr = trimmed
+				break
+			}
+			p.buffer.Reset()
+			p.buffer.WriteString(bufStr)
+			p.strayChannelName = false
+		}
+
 		// Check for thinking open tag
 		if idx := strings.Index(bufStr, gemma4ThinkingOpenTag); idx != -1 {
 			contentBefore := bufStr[:idx]
@@ -269,6 +326,7 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			p.buffer.Reset()
 			p.buffer.WriteString(remaining)
 			p.state = Gemma4CollectingContent
+			p.strayChannelName = true
 
 			if len(thinking) > 0 {
 				events = append(events, gemma4EventThinkingContent{content: thinking})
@@ -324,7 +382,7 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			p.buffer.WriteString(remaining)
 			p.state = Gemma4IgnoringPostToolCallNoise
 
-			if toolCall, err := parseGemma4ToolCall(toolCallContent, p.tools); err == nil {
+			if toolCall, err := parseGemma4ClosedToolCall(toolCallContent, p.tools); err == nil {
 				events = append(events, gemma4EventToolCall{toolCall: toolCall})
 			} else {
 				slog.Warn("gemma4 tool call parsing failed", "error", err, "content", toolCallContent)
@@ -399,6 +457,38 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 // parseGemma4ToolCall parses a tool call in Gemma 4 format:
 // call:NAME{key:value,key:value}
+// parseGemma4ClosedToolCall parses a tool call the model finished: its closing
+// tag was emitted, so the call is not truncated and a missing final brace is a
+// formatting slip rather than an argument that never arrived.
+//
+// The general repair path deliberately leaves an unclosed object alone, because
+// closing one that a token limit cut short would turn a partial call into a
+// plausible-looking call with arguments missing. That reasoning does not apply
+// once the model has closed the call itself, and the case is common enough to
+// matter: one missing brace otherwise costs the whole call, which reaches the
+// caller as an empty response with the tool call silently dropped.
+func parseGemma4ClosedToolCall(content string, tools []api.Tool) (api.ToolCall, error) {
+	toolCall, err := parseGemma4ToolCall(content, tools)
+	if err == nil {
+		return toolCall, nil
+	}
+
+	open := strings.Index(content, "{")
+	if open == -1 {
+		return api.ToolCall{}, err
+	}
+
+	closed := content[:open] + repairGemma4MissingObjectClose(content[open:])
+	if closed == content {
+		return api.ToolCall{}, err
+	}
+
+	if toolCall, retryErr := parseGemma4ToolCall(closed, tools); retryErr == nil {
+		return toolCall, nil
+	}
+	return api.ToolCall{}, err
+}
+
 func parseGemma4ToolCall(content string, tools []api.Tool) (api.ToolCall, error) {
 	// Expected format: call:NAME{args}
 	if !strings.HasPrefix(content, "call:") {

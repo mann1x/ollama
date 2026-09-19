@@ -146,15 +146,10 @@ func main() {
 	// Do this after logging is set up so we can debug issues
 	if runtime.GOOS == "windows" && urlSchemeRequest != "" {
 		slog.Debug("checking for existing instance", "url", urlSchemeRequest)
-		if checkAndHandleExistingInstance(urlSchemeRequest) {
-			// The function will exit if it successfully sends to another instance
-			// If we reach here, we're the first/only instance
-		} else {
-			// No existing instance found, handle the URL scheme in this instance
-			go func() {
-				handleURLSchemeInCurrentInstance(urlSchemeRequest)
-			}()
-		}
+		// This exits after forwarding the request when another instance is
+		// running. First-instance requests are handled later by osRun, after the
+		// Windows UI dependencies are initialized and from the primary thread.
+		checkAndHandleExistingInstance(urlSchemeRequest)
 	}
 
 	// Detect if this is a first start after an upgrade, in
@@ -180,7 +175,9 @@ func main() {
 
 	// Check if another instance is already running
 	// On Windows, focus the existing instance; on other platforms, kill it
-	handleExistingInstance(startHidden)
+	if !handleExistingInstance(startHidden) {
+		return
+	}
 
 	// on macOS, offer the user to create a symlink
 	// from /usr/local/bin/ollama to the app bundle
@@ -205,7 +202,25 @@ func main() {
 	uiServerPort = port
 
 	st := &store.Store{}
+	if devMode {
+		if dbPath := strings.TrimSpace(os.Getenv("OLLAMA_APP_DB_PATH")); dbPath != "" {
+			st.DBPath = dbPath
+			slog.Debug("using development app database", "path", dbPath)
+		}
+	}
 	appStore = st
+
+	// Teach the updater whose consent to ask for. Every path that applies a
+	// staged installer runs through getStagedUpdate, which has no store of its
+	// own; without this it cannot tell a machine that has declined updates from
+	// one that has not, and applies the bundle either way.
+	updater.AutoUpdateAllowed = func() (bool, error) {
+		settings, err := st.Settings()
+		if err != nil {
+			return false, err
+		}
+		return settings.AutoUpdateEnabled, nil
+	}
 
 	// Enable CORS in development mode
 	if devMode {
@@ -324,11 +339,11 @@ func main() {
 		quit()
 	}()
 
-	if urlSchemeRequest != "" {
+	if urlSchemeRequest != "" && runtime.GOOS != "windows" {
 		go func() {
 			handleURLSchemeInCurrentInstance(urlSchemeRequest)
 		}()
-	} else {
+	} else if urlSchemeRequest == "" {
 		slog.Debug("no URL scheme request to handle")
 	}
 
@@ -343,7 +358,13 @@ func main() {
 		}
 	}()
 
-	osRun(cancel, hasCompletedFirstRun, startHidden)
+	settings, settingsErr := st.Settings()
+	showOnboarding := shouldShowOnboarding(settings, settingsErr)
+	if settingsErr != nil {
+		slog.Error("failed to load onboarding state", "error", settingsErr)
+	}
+
+	osRun(cancel, hasCompletedFirstRun, startHidden, showOnboarding, urlSchemeRequest)
 
 	slog.Info("shutting down desktop server")
 	if err := srv.Close(); err != nil {
@@ -353,6 +374,33 @@ func main() {
 	slog.Info("shutting down ollama server")
 	cancel()
 	<-done
+}
+
+func shouldShowOnboarding(settings store.Settings, err error) bool {
+	return err != nil || settings.OnboardingVersion < store.CurrentOnboardingVersion
+}
+
+func runInitialWindowsUI(
+	startHidden bool,
+	showOnboarding bool,
+	urlSchemeRequest string,
+	startHiddenFn func(),
+	handleURLFn func(string),
+	showUIFn func(string),
+) {
+	if urlSchemeRequest != "" {
+		handleURLFn(urlSchemeRequest)
+		return
+	}
+	if startHidden {
+		startHiddenFn()
+		return
+	}
+	if showOnboarding {
+		showUIFn("/")
+		return
+	}
+	showUIFn("/connect")
 }
 
 func startHiddenTasks() {
@@ -367,15 +415,21 @@ func startHiddenTasks() {
 			// Check if auto-update is enabled before automatically upgrading
 			settings, err := appStore.Settings()
 			if err != nil {
-				slog.Warn("failed to load settings for upgrade check", "error", err)
-			} else if !settings.AutoUpdateEnabled {
+				// Settings that cannot be read are not permission to upgrade.
+				// Falling through here is how one unreadable database turns
+				// into a silent replacement of the running build.
+				slog.Warn("failed to load settings for upgrade check; not upgrading", "error", err)
+				UpdateAvailable("")
+				return
+			}
+			if !settings.AutoUpdateEnabled {
 				slog.Info("auto-update disabled, skipping automatic upgrade at startup")
 				// Still show tray notification so user knows update is ready
 				UpdateAvailable("")
 				return
 			}
 
-			if err := updater.DoUpgradeAtStartup(); err != nil {
+			if err := updater.DoUpgradeAtStartup(); err != nil { //nolint:staticcheck,nolintlint // DoUpgradeAtStartup may always return non-nil on Windows
 				slog.Info("unable to perform upgrade at startup", "error", err)
 				// Make sure the restart to upgrade menu shows so we can attempt an interactive upgrade to get authorization
 				UpdateAvailable("")
@@ -432,7 +486,7 @@ func checkUserLoggedIn(uiServerPort int) bool {
 func handleConnectURLScheme() {
 	if checkUserLoggedIn(uiServerPort) {
 		slog.Info("user is already logged in, opening app instead")
-		showWindow(wv.webview.Window())
+		openUI("/")
 		return
 	}
 
@@ -469,39 +523,52 @@ func openInBrowser(url string) {
 }
 
 // parseURLScheme parses an ollama:// URL and validates it
-// Supports: ollama:// (open app) and ollama://connect (OAuth)
-func parseURLScheme(urlSchemeRequest string) (isConnect bool, err error) {
+// Supports: ollama:// (open app), ollama://apps, and ollama://connect (OAuth).
+func parseURLScheme(urlSchemeRequest string) (action string, err error) {
 	parsedURL, err := url.Parse(urlSchemeRequest)
 	if err != nil {
-		return false, fmt.Errorf("invalid URL: %w", err)
+		return "", fmt.Errorf("invalid URL: %w", err)
 	}
 
 	// Check if this is a connect URL
 	if parsedURL.Host == "connect" || strings.TrimPrefix(parsedURL.Path, "/") == "connect" {
-		return true, nil
+		return "connect", nil
+	}
+
+	if parsedURL.Host == "apps" || strings.TrimPrefix(parsedURL.Path, "/") == "apps" {
+		return "apps", nil
 	}
 
 	// Allow bare ollama:// or ollama:/// to open the app
 	if (parsedURL.Host == "" && parsedURL.Path == "") || parsedURL.Path == "/" {
-		return false, nil
+		return "", nil
 	}
 
-	return false, fmt.Errorf("unsupported ollama:// URL path: %s", urlSchemeRequest)
+	return "", fmt.Errorf("unsupported ollama:// URL path: %s", urlSchemeRequest)
 }
 
 // handleURLSchemeInCurrentInstance processes URL scheme requests in the current instance
 func handleURLSchemeInCurrentInstance(urlSchemeRequest string) {
-	isConnect, err := parseURLScheme(urlSchemeRequest)
+	err := dispatchURLSchemeRequest(urlSchemeRequest, handleConnectURLScheme, func() {
+		openUI("/")
+	}, openAppsUI)
 	if err != nil {
 		slog.Error("failed to parse URL scheme request", "url", urlSchemeRequest, "error", err)
-		return
 	}
+}
 
-	if isConnect {
-		handleConnectURLScheme()
-	} else {
-		if wv.webview != nil {
-			showWindow(wv.webview.Window())
-		}
+func dispatchURLSchemeRequest(urlSchemeRequest string, connect, open, apps func()) error {
+	action, err := parseURLScheme(urlSchemeRequest)
+	if err != nil {
+		return err
 	}
+	switch action {
+	case "connect":
+		connect()
+	case "apps":
+		apps()
+	default:
+		open()
+	}
+	return nil
 }

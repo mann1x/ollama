@@ -16,7 +16,6 @@
 - [Generate Embeddings](#generate-embeddings)
 - [List Running Models](#list-running-models)
 - [Version](#version)
-- [Experimental: Image Generation](#image-generation-experimental)
 
 ## Conventions
 
@@ -101,10 +100,13 @@ The final response in the stream also includes additional data about the generat
 - `total_duration`: time spent generating the response
 - `load_duration`: time spent in nanoseconds loading the model
 - `prompt_eval_count`: number of tokens in the prompt
-- `prompt_eval_duration`: time spent in nanoseconds evaluating the prompt
+- `prompt_eval_cached_count`: number of prompt tokens read from the cache
+- `prompt_eval_duration`: time spent in nanoseconds evaluating uncached prompt tokens
 - `eval_count`: number of tokens in the response
 - `eval_duration`: time in nanoseconds spent generating the response
 - `context`: an encoding of the conversation used in this response, this can be sent in the next request to keep a conversational memory
+- `think_budget`: the budget that applied, in the form it was written - a level such as `"medium"`, or a token count. This is the request's `think` value when that carried a budget, and the model's own `think_budget` parameter otherwise, which the caller may never have sent. Omitted when thinking was unbounded
+- `think_budget_tokens`: what that budget resolved to, in tokens. A level is a share of the room the response has, so it names a different number on every request; a budget written as a token count reports the same number in both fields. Omitted when thinking was unbounded
 - `response`: empty if the response was streamed, if not streamed, this will contain the full response
 
 To calculate how fast the response is generated in tokens per second (token/s), divide `eval_count` / `eval_duration` \* `10^9`.
@@ -393,7 +395,6 @@ curl http://localhost:11434/api/generate -d '{
     "top_k": 20,
     "top_p": 0.9,
     "min_p": 0.0,
-    "typical_p": 0.7,
     "repeat_last_n": 33,
     "temperature": 0.8,
     "repeat_penalty": 1.2,
@@ -581,6 +582,8 @@ Final response:
   "eval_duration": 4535599000
 }
 ```
+
+The final response carries the same additional data as [generate](#generate-a-completion), including `think_budget` and `think_budget_tokens` when thinking was bounded.
 
 #### Chat request (Streaming with tools)
 
@@ -1178,16 +1181,17 @@ Create a model from:
 
 - another model;
 - a safetensors directory; or
-- a GGUF file.
+- one or more GGUF files.
 
-If you are creating a model from a safetensors directory or from a GGUF file, you must [create a blob](#create-a-blob) for each of the files and then use the file name and SHA256 digest associated with each blob in the `files` field.
+Use GGUF community tools to prepare and quantize GGUF files before importing.
+
+If you are creating a model from a safetensors directory or from GGUF files, you must [push a blob](#push-a-blob) for each file and then use its file name and SHA256 digest in the `files` field.
 
 ### Parameters
 
 - `model`: name of the model to create
 - `from`: (optional) name of an existing model to create the new model from
 - `files`: (optional) a dictionary of file names to SHA256 digests of blobs to create the model from
-- `adapters`: (optional) a dictionary of file names to SHA256 digests of blobs for LORA adapters
 - `template`: (optional) the prompt template for the model
 - `renderer`: (optional) the name of the renderer for the model
 - `parser`: (optional) the name of the parser for the model
@@ -1196,15 +1200,17 @@ If you are creating a model from a safetensors directory or from a GGUF file, yo
 - `parameters`: (optional) a dictionary of parameters for the model (see [Modelfile](./modelfile.mdx#valid-parameters-and-values) for a list of parameters)
 - `messages`: (optional) a list of message objects used to create a conversation
 - `stream`: (optional) if `false` the response will be returned as a single response object, rather than a stream of objects
-- `quantize` (optional): quantize a non-quantized (e.g. float16) model
+- `quantize`: (optional) quantize safetensors model weights for MLX during import
 
 #### Quantization types
 
-| Type   | Recommended |
-| ------ | :---------: |
-| q4_K_M |     \*      |
-| q4_K_S |             |
-| q8_0   |     \*      |
+| Type  | Recommended |
+| ----- | :---------: |
+| nvfp4 |     \*      |
+| mxfp8 |     \*      |
+| mxfp4 |             |
+| int4  |             |
+| int8  |             |
 
 ### Examples
 
@@ -1240,40 +1246,9 @@ A stream of JSON objects is returned:
 {"status":"success"}
 ```
 
-#### Quantize a model
-
-Quantize a non-quantized model.
-
-##### Request
-
-```shell
-curl http://localhost:11434/api/create -d '{
-  "model": "llama3.2:quantized",
-  "from": "llama3.2:3b-instruct-fp16",
-  "quantize": "q4_K_M"
-}'
-```
-
-##### Response
-
-A stream of JSON objects is returned:
-
-```json
-{"status":"quantizing F16 model to Q4_K_M","digest":"0","total":6433687776,"completed":12302}
-{"status":"quantizing F16 model to Q4_K_M","digest":"0","total":6433687776,"completed":6433687552}
-{"status":"verifying conversion"}
-{"status":"creating new layer sha256:fb7f4f211b89c6c4928ff4ddb73db9f9c0cfca3e000c3e40d6cf27ddc6ca72eb"}
-{"status":"using existing layer sha256:966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396"}
-{"status":"using existing layer sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d"}
-{"status":"using existing layer sha256:a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd"}
-{"status":"using existing layer sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb"}
-{"status":"writing manifest"}
-{"status":"success"}
-```
-
 #### Create a model from GGUF
 
-Create a model from a GGUF file. The `files` parameter should be filled out with the file name and SHA256 digest of the GGUF file you wish to use. Use [/api/blobs/:digest](#push-a-blob) to push the GGUF file to the server before calling this API.
+Create a model from GGUF files. The `files` parameter should contain the file name and SHA256 digest of each GGUF file. For a split GGUF model, include each shard under its original split filename. Use [/api/blobs/:digest](#push-a-blob) to push each file before calling this API.
 
 ##### Request
 
@@ -1299,7 +1274,7 @@ A stream of JSON objects is returned:
 
 #### Create a model from a Safetensors directory
 
-The `files` parameter should include a dictionary of files for the safetensors model which includes the file names and SHA256 digest of each file. Use [/api/blobs/:digest](#push-a-blob) to first push each of the files to the server before calling this API. Files will remain in the cache until the Ollama server is restarted.
+The `files` parameter should include the file name and SHA256 digest of each file in the Safetensors model. Use [/api/blobs/:digest](#push-a-blob) to push each file before calling this API. Files remain in the cache until the Ollama server is restarted.
 
 ##### Request
 
@@ -1322,11 +1297,8 @@ curl http://localhost:11434/api/create -d '{
 A stream of JSON objects is returned:
 
 ```shell
-{"status":"converting model"}
-{"status":"creating new layer sha256:05ca5b813af4a53d2c2922933936e398958855c44ee534858fcfd830940618b6"}
-{"status":"using autodetected template llama3-instruct"}
-{"status":"using existing layer sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb"}
-{"status":"writing manifest"}
+{"status":"importing fred (2 tensors)"}
+{"status":"writing manifest for fred"}
 {"status":"success"}
 ```
 
@@ -1447,6 +1419,13 @@ Show information about a model including details, modelfile, template, parameter
 
 - `model`: name of the model to show
 - `verbose`: (optional) if set to `true`, returns full data for verbose response fields
+
+It also accepts `think`, the think value the caller intends to send, so the budget below can be answered for a level the caller sets rather than only for one the model carries.
+
+The response reports the thinking budget under the same names the generate and chat responses use:
+
+- `think_budget`: the budget that would apply, in the form it was written - a level such as `"medium"`, or a token count. This is the request's `think` value when that carries a budget, and the model's own [`think_budget`](./modelfile.mdx#valid-parameters-and-values) parameter otherwise - the same precedence a completion uses. The parameter also appears in `parameters`, but only as a line of text to parse. Omitted when neither carries a budget
+- `think_budget_tokens`: what that budget resolves to, in tokens, against the model's own `num_predict` and `num_ctx` - or against `options` when the request supplies them, so a caller can ask what the budget would be under the options it intends to send. Omitted when there is no window to resolve against
 
 ### Examples
 
