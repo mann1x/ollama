@@ -6,7 +6,8 @@
     "renaming such a branch CLOSES the PR (measured 2026-09-21 on #18307). They get the",
     "prefix if and when those PRs close.",
     "status 'fork-only' means there is no upstream PR and none is planned: the patch",
-    "is ours to carry and upstream_pr is null. Every other entry is 'open-upstream'."
+    "is ours to carry and upstream_pr is null. Every other entry is 'open-upstream'.",
+    "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.2",
   "updated": "2026-09-21",
@@ -135,7 +136,8 @@
         "llama/compat/README.md"
       ],
       "title": "llama: end a spent reasoning budget at a line, not mid-word",
-      "status": "open-upstream"
+      "status": "open-upstream",
+      "note": "UNRESOLVED, flagged 2026-09-21: this branch's copy of llama/compat/004-reasoning-budget-line-boundary.patch (825 lines) and think-budget's (945 lines) have drifted in BOTH directions, so neither is a superset. Only here: the --reasoning-budget-scope CLI flag and the THINK_BUDGET_SCOPE env var (the upstream-facing surface; ollama sets the scope per-request over the wire instead). Only on think-budget, and reaching nobody through this manifest: ca2e2cdb (reset_tokens), b4c58eee (forced_end_pos, common_reasoning_budget_end_offset -- the fix for a spent response repeating its wrap-up message once per reopened block, measured 32x in one turn), and the llama.cpp half of 677f91ce (reset_tokens, start_tokens). c044b553 is NOT affected: its content was folded in when this branch was rebased. A consumer merging this branch gets the flag and silently loses those three. Needs a decision from this branch's owner; not resolved unilaterally because #18212 is open upstream."
     },
     {
       "slug": "up-native-thinking-replay",
@@ -217,6 +219,37 @@
       ],
       "title": "parsers: let a parser name the tags its tool calls open with",
       "status": "fork-only"
+    },
+    {
+      "slug": "up-response-scope-think-budget",
+      "branch": "up-response-scope-think-budget",
+      "sha": "fdf0d23c",
+      "upstream_pr": null,
+      "rebased_onto": null,
+      "depends_on": [
+        "up-think-budget",
+        "up-reasoning-budget-line-boundary",
+        "up-toolcall-tags"
+      ],
+      "base": {
+        "sha": "8f64c67d",
+        "merge_of": [
+          "v0.34.2",
+          "up-think-budget@6ae1ee7c",
+          "up-reasoning-budget-line-boundary@3d15e71c",
+          "up-toolcall-tags@61c78a05"
+        ],
+        "note": "NOT the upstream tag, and cannot be: this patch calls parsers.ToolCallStartTagForParser (added by up-toolcall-tags) and extends the reasoning-budget request plumbing of up-think-budget and up-reasoning-budget-line-boundary. The branch is built on the merge of exactly those three at the shas above, so it merges cleanly only after all three and is listed last for that reason."
+      },
+      "files": [
+        "llm/llama_server.go",
+        "llm/llama_server_test.go",
+        "llm/server.go",
+        "server/routes.go"
+      ],
+      "title": "llm: spend the thinking budget across a response, not per block",
+      "status": "fork-only",
+      "note": "Go half only. The code is already on think-budget, authored there as 677f91ce -- this branch is the extraction that makes it merge-able, so merging it into think-budget is a no-op for these four files (all 77 added lines verified present). The llama.cpp half of 677f91ce is NOT here; see known_conflicts on the 004 patch."
     }
   ],
   "known_conflicts": [
