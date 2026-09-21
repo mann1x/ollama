@@ -4,17 +4,20 @@
     "patches[] ORDER IS APPLY ORDER. Merge each as its own --no-ff merge, in this order.",
     "Two branches lack the up- prefix because they are heads of open cross-fork PRs:",
     "renaming such a branch CLOSES the PR (measured 2026-09-21 on #18307). They get the",
-    "prefix if and when those PRs close."
+    "prefix if and when those PRs close.",
+    "status 'fork-only' means there is no upstream PR and none is planned: the patch",
+    "is ours to carry and upstream_pr is null. Every other entry is 'open-upstream'."
   ],
   "base": "v0.34.2",
   "updated": "2026-09-21",
   "integration": {
     "branch": "think-budget",
-    "sha": "3af5f361",
+    "sha": "d57818e3",
     "note": "the tree this patch set describes; the manifest commit is its child",
     "release": {
       "tag": "v0.34.2-1-thinkbudget",
-      "sha": "645ec440"
+      "sha": "645ec440",
+      "note": "cut before up-gemma4-unparsed-tool-call-content; it carries patches 1-12 only"
     }
   },
   "verification": {
@@ -185,6 +188,19 @@
       ],
       "title": "gemma4: a tool call can open before the thinking channel is closed",
       "status": "open-upstream"
+    },
+    {
+      "slug": "up-gemma4-unparsed-tool-call-content",
+      "branch": "up-gemma4-unparsed-tool-call-content",
+      "sha": "cbcc5ed2",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_unparsed_test.go"
+      ],
+      "title": "gemma4: a tool call the parser cannot read must not vanish",
+      "status": "fork-only"
     }
   ],
   "known_conflicts": [
