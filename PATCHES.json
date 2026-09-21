@@ -13,7 +13,7 @@
   "integration": {
     "branch": "think-budget",
     "sha": "d57818e3",
-    "note": "the tree this patch set describes; the manifest commit is its child",
+    "note": "the last think-budget commit that changed code, which is the tree this patch set describes; the manifest commits after it touch only this file",
     "release": {
       "tag": "v0.34.2-1-thinkbudget",
       "sha": "645ec440",
