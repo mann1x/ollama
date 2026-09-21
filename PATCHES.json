@@ -201,6 +201,22 @@
       ],
       "title": "gemma4: a tool call the parser cannot read must not vanish",
       "status": "fork-only"
+    },
+    {
+      "slug": "up-toolcall-tags",
+      "branch": "up-toolcall-tags",
+      "sha": "61c78a05",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/parsers.go",
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_test.go",
+        "model/parsers/qwen35.go",
+        "model/parsers/qwen35_test.go"
+      ],
+      "title": "parsers: let a parser name the tags its tool calls open with",
+      "status": "fork-only"
     }
   ],
   "known_conflicts": [
@@ -221,6 +237,15 @@
       "file": "model/parsers/gemma4_test.go",
       "order_independent": true,
       "resolution": "same shape: two additive test blocks at the same point. Keep both. Reversing conflicts identically."
+    },
+    {
+      "between": [
+        "up-think-budget",
+        "up-toolcall-tags"
+      ],
+      "file": "model/parsers/parsers.go, model/parsers/gemma4.go, model/parsers/qwen35.go",
+      "order_independent": true,
+      "resolution": "same shape again, three files at once: up-think-budget adds ThinkingTagger and the ThinkingTags methods, up-toolcall-tags adds ToolCallTagger and the ToolCallTags methods, both at the same point. Keep both, ThinkingTagger first. NOTE the boundary cuts inside a function: the closing brace on the line after >>>>>>> belongs to BOTH halves, so close the first block with its own brace rather than concatenating the two sides -- a plain keep-both here produces code that does not parse."
     }
   ]
 }
