@@ -1,0 +1,210 @@
+{
+  "_comment": [
+    "Contract between mann1x/ollama and xollama. See FORK-SYNC.md (mann1x/xollama@dev).",
+    "patches[] ORDER IS APPLY ORDER. Merge each as its own --no-ff merge, in this order.",
+    "Two branches lack the up- prefix because they are heads of open cross-fork PRs:",
+    "renaming such a branch CLOSES the PR (measured 2026-09-21 on #18307). They get the",
+    "prefix if and when those PRs close."
+  ],
+  "base": "v0.34.2",
+  "updated": "2026-09-21",
+  "integration": {
+    "branch": "think-budget",
+    "sha": "3af5f361",
+    "note": "the tree this patch set describes; the manifest commit is its child",
+    "release": {
+      "tag": "v0.34.2-1-thinkbudget",
+      "sha": "645ec440"
+    }
+  },
+  "verification": {
+    "per_patch": "go build ./... plus go vet and go test on every package the patch touches, run on the rebased branch at the sha below",
+    "apply_order": "the full sequence was replayed as sequential --no-ff merges from v0.34.2; see known_conflicts"
+  },
+  "patches": [
+    {
+      "slug": "up-repeat-guard",
+      "branch": "up-repeat-guard",
+      "sha": "f87ae80d",
+      "upstream_pr": 17563,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "llm/llama_server.go",
+        "llm/repeat_guard.go",
+        "llm/repeat_guard_test.go",
+        "llm/server.go",
+        "openai/openai.go"
+      ],
+      "title": "llm: stop guessing that a repetitive payload is a runaway",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-truncated-tool-calls",
+      "branch": "up-truncated-tool-calls",
+      "sha": "70213554",
+      "upstream_pr": 17564,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "server/routes.go",
+        "server/toolcalls.go",
+        "server/toolcalls_test.go"
+      ],
+      "title": "server: do not hand over a tool call the model did not finish writing",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-gemma4-object-close",
+      "branch": "up-gemma4-object-close",
+      "sha": "64f89f3b",
+      "upstream_pr": 17565,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_test.go"
+      ],
+      "title": "gemma4: recover a finished tool call that is missing its closing brace",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-think-budget",
+      "branch": "up-think-budget",
+      "sha": "6ae1ee7c",
+      "upstream_pr": 17566,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "api/types.go",
+        "llm/llama_server.go",
+        "llm/server.go",
+        "model/parsers/parsers.go",
+        "server/routes.go",
+        "thinking/chat_template.go",
+        "(+33 more)"
+      ],
+      "title": "api: bound thinking with a token budget, per request or per model",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-mlx-libdl",
+      "branch": "up-mlx-libdl",
+      "sha": "88108349",
+      "upstream_pr": 17567,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "mlx/mlx.go"
+      ],
+      "title": "mlx: link against libdl on linux",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-gemma4-stray-channel-name",
+      "branch": "up-gemma4-stray-channel-name",
+      "sha": "acf95e0c",
+      "upstream_pr": 17626,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_test.go"
+      ],
+      "title": "gemma4: do not answer with a channel name the parser was cut off from",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "qwen3coder-tolerate-malformed-tool-calls",
+      "branch": "qwen3coder-tolerate-malformed-tool-calls",
+      "sha": "d272c4f1",
+      "upstream_pr": 17914,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/qwen3coder.go",
+        "model/parsers/qwen3coder_test.go"
+      ],
+      "title": "qwen3coder: tolerate a dropped closing tag, and stop rewriting parameter values",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-reasoning-budget-line-boundary",
+      "branch": "up-reasoning-budget-line-boundary",
+      "sha": "3d15e71c",
+      "upstream_pr": 18212,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "llama/compat/004-reasoning-budget-line-boundary.patch",
+        "llama/compat/README.md"
+      ],
+      "title": "llama: end a spent reasoning budget at a line, not mid-word",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-native-thinking-replay",
+      "branch": "up-native-thinking-replay",
+      "sha": "af4825f7",
+      "upstream_pr": 18281,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "llm/llama_server.go",
+        "llm/llama_server_test.go"
+      ],
+      "title": "llm: send assistant thinking to the chat template",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-gemma4-stray-closer",
+      "branch": "up-gemma4-stray-closer",
+      "sha": "d54fe13e",
+      "upstream_pr": 18288,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_test.go"
+      ],
+      "title": "parsers: drop an unmatched thinking close tag instead of leaking it",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "up-jinja-runner-reuse",
+      "branch": "up-jinja-runner-reuse",
+      "sha": "43a969b9",
+      "upstream_pr": 18289,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "server/sched.go",
+        "server/sched_test.go"
+      ],
+      "title": "server: reload when two tags share a blob but need different runner flags",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "gemma4-toolcall-in-thinking",
+      "branch": "gemma4-toolcall-in-thinking",
+      "sha": "16a78556",
+      "upstream_pr": 18307,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_test.go"
+      ],
+      "title": "gemma4: a tool call can open before the thinking channel is closed",
+      "status": "open-upstream"
+    }
+  ],
+  "known_conflicts": [
+    {
+      "between": [
+        "up-think-budget",
+        "up-native-thinking-replay"
+      ],
+      "file": "llm/llama_server_test.go",
+      "order_independent": true,
+      "resolution": "both patches add a new top-level test function at the same point; keep both blocks. Reversing the order conflicts identically -- this is not an ordering mistake."
+    },
+    {
+      "between": [
+        "up-gemma4-object-close",
+        "up-gemma4-stray-closer"
+      ],
+      "file": "model/parsers/gemma4_test.go",
+      "order_independent": true,
+      "resolution": "same shape: two additive test blocks at the same point. Keep both. Reversing conflicts identically."
+    }
+  ]
+}

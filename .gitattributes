@@ -7,22 +7,14 @@ llama/**/*.cuh linguist-vendored
 llama/**/*.m linguist-vendored
 llama/**/*.metal linguist-vendored
 
-ml/backend/**/*.c linguist-vendored
-ml/backend/**/*.h linguist-vendored
-ml/backend/**/*.cpp linguist-vendored
-ml/backend/**/*.hpp linguist-vendored
-ml/backend/**/*.cu linguist-vendored
-ml/backend/**/*.cuh linguist-vendored
-ml/backend/**/*.m linguist-vendored
-ml/backend/**/*.metal linguist-vendored
-ml/backend/**/*.comp linguist-vendored
-ml/backend/**/*.glsl linguist-vendored
-ml/backend/**/CMakeLists.txt linguist-vendored
-
 app/webview linguist-vendored
 
 llama/build-info.cpp linguist-generated
-ml/backend/ggml/ggml/src/ggml-metal/ggml-metal-embed.s linguist-generated
 
 * text=auto
 *.go text eol=lf
+
+# Patches are applied with `git apply` to sources fetched from upstream, which
+# are checked out with LF. `* text=auto` above would otherwise hand these to a
+# Windows working tree as CRLF, and every context line would fail to match.
+*.patch text eol=lf

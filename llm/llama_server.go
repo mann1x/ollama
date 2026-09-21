@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -39,11 +40,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/image/webp"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/envconfig"
-	"github.com/ollama/ollama/fs/ggml"
+	"github.com/ollama/ollama/fs/gguf"
 	"github.com/ollama/ollama/ml"
 )
 
@@ -152,12 +154,13 @@ type llamaServerRunner struct {
 	// used to map DeviceIDs to device names for VRAMByGPU lookups.
 	gpus []ml.DeviceInfo
 
-	ggml          *ggml.GGML
+	metadata      *gguf.Model
 	totalLayers   uint64 // maximum offloadable model layers
 	loadStart     time.Time
 	loadActivity  atomic.Int64
 	loadTracking  atomic.Bool
 	rawEmbeddings bool
+	splitDirs     []string
 
 	sem *semaphore.Weighted
 
@@ -253,11 +256,11 @@ func (s *llamaServerRunner) completionPrompt(prompt, leadingBOS string) string {
 }
 
 func (s *llamaServerRunner) tokenizerAddsBOS() bool {
-	if s.ggml == nil {
+	if s.metadata == nil {
 		return false
 	}
 
-	kv := s.ggml.KV()
+	kv := s.metadata.KV()
 
 	if kv.String("tokenizer.ggml.pre") == "lfm2" {
 		return true
@@ -381,8 +384,8 @@ func startLlamaServer(launch llamaServerLaunchConfig, out io.Writer) (cmd *exec.
 
 	params = append(params, qwenVLServerArgs(launch.modelArch)...)
 
-	// LoRA adapters
 	for _, adapter := range launch.adapters {
+		slog.Warn("LoRA adapters are deprecated and will be removed in a future release", "adapter", adapter)
 		params = append(params, "--lora", adapter)
 	}
 
@@ -659,10 +662,20 @@ func appendMMProjArgs(params []string, launch llamaServerLaunchConfig) []string 
 }
 
 func (launch llamaServerLaunchConfig) mmprojOffloadDisabled() (bool, string) {
+	if launch.requiresMMProjGPUOffload() {
+		return false, ""
+	}
 	if launch.forceNoMMProjOffload {
 		return true, "startup-oom-retry"
 	}
 	return shouldDisableMMProjOffload(launch.opts, launch.gpus, launch.modelLayers, launch.mmprojMemory)
+}
+
+func (launch llamaServerLaunchConfig) requiresMMProjGPUOffload() bool {
+	// Gemma3n's MobileNetV5 projector silently produces corrupted image
+	// embeddings when it runs on the CPU backend, so keep it on the GPU
+	// whenever one is in play.
+	return launch.modelArch == "gemma3n" && launch.opts.NumGPU != 0 && len(launch.gpus) > 0
 }
 
 func shouldDisableMMProjOffload(opts api.Options, gpus []ml.DeviceInfo, modelLayers, mmprojMemory uint64) (bool, string) {
@@ -730,7 +743,7 @@ func (launch llamaServerLaunchConfig) mmprojFitTargetMiB() (uint64, bool) {
 }
 
 // mmprojMemoryRequirement is a stopgap until fit accounts for mmproj memory directly.
-func mmprojMemoryRequirement(modelPath string, f *ggml.GGML, projectors []string) (uint64, error) {
+func mmprojMemoryRequirement(modelPath string, f *gguf.Model, projectors []string) (uint64, error) {
 	if len(projectors) == 0 {
 		return 0, nil
 	}
@@ -739,32 +752,18 @@ func mmprojMemoryRequirement(modelPath string, f *ggml.GGML, projectors []string
 		if f == nil {
 			return 0, errors.New("read inline mmproj metadata: missing model metadata")
 		}
-		var size uint64
-		for _, prefix := range []string{"v.", "mm.", "a."} {
-			for _, tensor := range f.Tensors().Items(prefix) {
-				size += tensor.Size()
-			}
-		}
+		size := f.Tensors().Size("v.", "mm.", "a.")
 		if size == 0 {
 			return 0, errors.New("read inline mmproj metadata: no projector tensors found")
 		}
 		return size, nil
 	}
 
-	file, err := os.Open(projectors[0])
+	projector, err := LoadModel(projectors[0], 1024)
 	if err != nil {
 		return 0, fmt.Errorf("read mmproj metadata %q: %w", projectors[0], err)
 	}
-	defer file.Close()
-
-	projector, err := ggml.Decode(file, 1024)
-	if err != nil {
-		return 0, fmt.Errorf("read mmproj metadata %q: %w", projectors[0], err)
-	}
-	var size uint64
-	for _, tensor := range projector.Tensors().Items() {
-		size += tensor.Size()
-	}
+	size := projector.Tensors().Size()
 	if size == 0 {
 		return 0, fmt.Errorf("read mmproj metadata %q: no projector tensors found", projectors[0])
 	}
@@ -832,14 +831,14 @@ func externalDraftType(path string) (string, error) {
 	return draftTypeMTP, nil
 }
 
-func hasMTPDraft(f *ggml.GGML) bool {
+func hasMTPDraft(f *gguf.Model) bool {
 	if f.KV().Uint("nextn_predict_layers") > 0 {
 		return true
 	}
 	return hasLegacyQwenMTPDraft(f.KV().Architecture(), f.Tensors().Items("mtp."))
 }
 
-func hasLegacyQwenMTPDraft(arch string, tensors []*ggml.Tensor) bool {
+func hasLegacyQwenMTPDraft(arch string, tensors []gguf.TensorInfo) bool {
 	switch arch {
 	case "qwen35", "qwen35moe":
 		return len(tensors) > 0
@@ -852,7 +851,7 @@ func hasLegacyQwenMTPDraft(arch string, tensors []*ggml.Tensor) bool {
 func NewLlamaServerRunner(
 	gpus []ml.DeviceInfo,
 	modelPath string,
-	f *ggml.GGML,
+	f *gguf.Model,
 	adapters, projectors []string,
 	opts api.Options,
 	numParallel int,
@@ -861,7 +860,7 @@ func NewLlamaServerRunner(
 ) (LlamaServer, error) {
 	// Check if this is an embedding model
 	arch := f.KV().Architecture()
-	_, isEmbedding := f.KV()[fmt.Sprintf("%s.pooling_type", arch)]
+	isEmbedding := f.KV().Has("pooling_type")
 
 	// Older Ollama-format GGUFs store vision tensors (v.*, mm.*) inline in
 	// the main model file rather than in a separate projector layer. When
@@ -910,6 +909,11 @@ func NewLlamaServerRunner(
 			return nil, err
 		}
 	}
+	splitModel, err := materializeSplitModels(f.Files(), projectors, config)
+	if err != nil {
+		return nil, err
+	}
+	config.DraftModelPath = splitModel.draftModelPath
 
 	gpuLibs := ml.LibraryPaths(gpus)
 	status := NewStatusWriter(os.Stderr)
@@ -926,10 +930,10 @@ func NewLlamaServerRunner(
 	serverEnvs["LLAMA_MEDIA_MARKER"] = mediaMarker
 
 	launch := llamaServerLaunchConfig{
-		modelPath:    modelPath,
+		modelPath:    splitModel.modelPath,
 		modelArch:    arch,
 		draftType:    draftType,
-		projectors:   slices.Clone(projectors),
+		projectors:   slices.Clone(splitModel.projectors),
 		mmprojMemory: mmprojMemory,
 		modelLayers:  f.KV().BlockCount() + 1,
 		adapters:     slices.Clone(adapters),
@@ -948,11 +952,12 @@ func NewLlamaServerRunner(
 		status:           status,
 		options:          opts,
 		modelPath:        modelPath,
+		splitDirs:        splitModel.dirs,
 		mediaMarker:      mediaMarker,
 		vramByDevice:     make(map[string]uint64),
 		systemFreeAtLoad: make(map[string]uint64),
 		gpus:             gpus,
-		ggml:             f,
+		metadata:         f,
 		totalLayers:      f.KV().BlockCount() + 1,
 		rawEmbeddings:    legacyEmbeddingsWereRaw(f.KV()),
 		sem:              semaphore.NewWeighted(int64(numParallel)),
@@ -963,6 +968,7 @@ func NewLlamaServerRunner(
 	memWriter.runner = s
 
 	if err := s.startProcess(); err != nil {
+		_ = s.removeSplitDirs()
 		msg := s.lastErrMsg()
 		return nil, fmt.Errorf("error starting llama-server: %v %s", err, msg)
 	}
@@ -978,9 +984,9 @@ func cloneStringMap(src map[string]string) map[string]string {
 	return dst
 }
 
-func legacyEmbeddingsWereRaw(kv ggml.KV) bool {
+func legacyEmbeddingsWereRaw(kv *gguf.Metadata) bool {
 	arch := kv.Architecture()
-	if _, ok := kv[fmt.Sprintf("%s.pooling_type", arch)]; !ok {
+	if !kv.Has("pooling_type") {
 		return false
 	}
 
@@ -1057,6 +1063,9 @@ func (s *llamaServerRunner) Load(ctx context.Context, systemInfo ml.SystemInfo, 
 			return nil, fmt.Errorf("llama-server startup failed after projector CPU offload retry: %w", err)
 		}
 	}
+	if err := s.removeSplitDirs(); err != nil {
+		slog.Debug("split GGUF alias cleanup deferred until runner shutdown", "error", err)
+	}
 
 	// Verify that buffer size parsing captured GPU allocations.
 	// If parsing failed (e.g., llama-server log format changed), warn so the
@@ -1103,6 +1112,9 @@ func (s *llamaServerRunner) retryWithMMProjCPUOffload(loadErr error) (bool, erro
 
 func (s *llamaServerRunner) shouldRetryMMProjCPUOffload(err error) bool {
 	if err == nil || s.mmprojOffloadOOMRetried || !IsOutOfMemory(err) || len(s.launch.projectors) == 0 {
+		return false
+	}
+	if s.launch.requiresMMProjGPUOffload() {
 		return false
 	}
 	// llama-server --fit can select a text-layer placement that fits before
@@ -1410,6 +1422,25 @@ type llamaServerCompletionRequest struct {
 	JsonSchema      json.RawMessage `json:"json_schema,omitempty"`
 	NProbs          int             `json:"n_probs,omitempty"`
 	PreservedTokens []string        `json:"preserved_tokens,omitempty"`
+	TimingsPerToken bool            `json:"timings_per_token,omitempty"`
+
+	// Reasoning budget sampler. llama-server activates it once it sees
+	// ReasoningBudgetStartTag generated (or present in GenerationPrompt), then
+	// forces ReasoningBudgetEndTag after ReasoningBudgetTokens tokens.
+	ReasoningBudgetTokens   int    `json:"reasoning_budget_tokens,omitempty"`
+	ReasoningBudgetStartTag string `json:"reasoning_budget_start_tag,omitempty"`
+	ReasoningBudgetEndTag   string `json:"reasoning_budget_end_tag,omitempty"`
+	// ReasoningBudgetMessage must be sent even when empty: llama-server builds
+	// the sequence it forces from message+end_tag, and only does so when this
+	// field is present. A pointer keeps the empty string on the wire.
+	ReasoningBudgetMessage *string `json:"reasoning_budget_message,omitempty"`
+	// ReasoningBudgetScope spends the budget across the whole response
+	// ("response") rather than re-arming it for every thinking block
+	// ("block", llama-server's default). ReasoningBudgetResetTag forgives what
+	// has been spent when it appears -- a tool call means progress, not a loop.
+	ReasoningBudgetScope    string `json:"reasoning_budget_scope,omitempty"`
+	ReasoningBudgetResetTag string `json:"reasoning_budget_reset_tag,omitempty"`
+	GenerationPrompt        string `json:"generation_prompt,omitempty"`
 }
 
 func llamaServerPreservedTokens(parserTokens []string, toolCallTag string) []string {
@@ -1456,6 +1487,41 @@ func leadingSpecialTokenCandidate(tag string) string {
 	return tag[:end+1]
 }
 
+// maxThinkingGenerationPrompt bounds how much of the prompt is replayed into
+// the budget sampler. Every renderer that primes thinking does so with the
+// opening tag and at most a channel name, so a longer run means the tag came
+// from message content rather than the template: replaying that would activate
+// the budget against text the model never generated.
+const maxThinkingGenerationPrompt = 64
+
+// thinkingGenerationPrompt returns the part of the prompt that already sits
+// inside an unclosed thinking block, for llama-server to replay into the
+// reasoning-budget sampler before decoding.
+//
+// The sampler leaves its idle state only when the opening tag passes through
+// it, so a template that primes thinking — by ending the prompt with the tag,
+// or with the tag plus a channel name, as gemma4 does after a tool response —
+// otherwise leaves the budget silently inert for the whole turn. Matching the
+// unclosed opening rather than the exact suffix keeps that from depending on
+// how much a renderer writes after the tag.
+func thinkingGenerationPrompt(prompt, startTag, endTag string) string {
+	if startTag == "" || endTag == "" {
+		return ""
+	}
+
+	start := strings.LastIndex(prompt, startTag)
+	if start == -1 {
+		return ""
+	}
+
+	tail := prompt[start:]
+	if strings.Contains(tail[len(startTag):], endTag) || len(tail) > maxThinkingGenerationPrompt {
+		return ""
+	}
+
+	return tail
+}
+
 // llamaServerMultimodalPrompt is used when images are present.
 // llama-server's /completion endpoint accepts this as the "prompt" field.
 type llamaServerMultimodalPrompt struct {
@@ -1499,7 +1565,7 @@ type llamaServerChatResponse struct {
 }
 
 type llamaServerTimings struct {
-	CacheN    int     `json:"cache_n"`
+	CacheN    *int    `json:"cache_n"`
 	PromptN   int     `json:"prompt_n"`
 	PromptMS  float64 `json:"prompt_ms"`
 	PredictN  int     `json:"predicted_n"`
@@ -1507,7 +1573,10 @@ type llamaServerTimings struct {
 }
 
 func (t llamaServerTimings) promptEvalCount() int {
-	return t.CacheN + t.PromptN
+	if t.CacheN == nil {
+		return t.PromptN
+	}
+	return *t.CacheN + t.PromptN
 }
 
 type llamaServerApplyTemplateResponse struct {
@@ -1572,10 +1641,41 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 		TypicalP:        req.Options.TypicalP,
 		Seed:            req.Options.Seed,
 		PreservedTokens: llamaServerPreservedTokens(req.PreservedTokens, req.ToolCallTag),
+		TimingsPerToken: req.IncludeIntermediateMetrics,
 	}
 
 	if req.Logprobs {
 		lsReq.NProbs = max(req.TopLogprobs, 1)
+	}
+
+	// Cap thinking. llama-server's reasoning budget sampler needs both
+	// delimiters: it starts counting at the opening tag and forces the closing
+	// tag once the budget runs out.
+	if req.ThinkBudget > 0 && req.ThinkingStartTag != "" && req.ThinkingEndTag != "" {
+		lsReq.ReasoningBudgetTokens = req.ThinkBudget
+		lsReq.ReasoningBudgetStartTag = req.ThinkingStartTag
+		lsReq.ReasoningBudgetEndTag = req.ThinkingEndTag
+		// Sent even when empty. llama-server builds the sequence it forces
+		// from message+end_tag, and on the pinned runtime it builds it in this
+		// field's handler, so an absent field is a handler that never runs:
+		// the budget expires with nothing to force, the sampler logs its usual
+		// states, and the thinking block is left open.
+		lsReq.ReasoningBudgetMessage = &req.ThinkBudgetMessage
+
+		// Bound the response, not the block. Measured live on gemma4: six
+		// consecutive thinking blocks, each closed by the model just short of
+		// its 8,000-token window and each re-armed in full, consumed a 32,000
+		// token output cap without the budget ever expiring -- so the message
+		// that tells the model to wrap up was never injected and the turn
+		// ended with neither an answer nor a tool call.
+		lsReq.ReasoningBudgetScope = "response"
+		lsReq.ReasoningBudgetResetTag = req.ThinkBudgetResetTag
+
+		// The sampler only sees tokens the model generates, so a template that
+		// primes thinking by ending the prompt inside a thinking block would
+		// never activate it. Hand that opening over as the generation prompt
+		// instead: llama-server replays it into the sampler before decoding.
+		lsReq.GenerationPrompt = thinkingGenerationPrompt(req.Prompt, req.ThinkingStartTag, req.ThinkingEndTag)
 	}
 
 	// Handle format: pass JSON schema directly to llama-server, or use grammar
@@ -1592,8 +1692,6 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 				return fmt.Errorf("invalid format: %q; expected \"json\" or a valid JSON Schema object", req.Format)
 			}
 		}
-	} else if req.Grammar != "" {
-		lsReq.Grammar = req.Grammar
 	}
 
 	// Convert media: replace Ollama's stable [img-N] markers with the per-process
@@ -1604,7 +1702,11 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 		for _, media := range req.Media {
 			marker := fmt.Sprintf("[img-%d]", media.ID)
 			promptStr = strings.Replace(promptStr, marker, s.llamaServerMediaMarker(), 1)
-			mediaData = append(mediaData, base64.StdEncoding.EncodeToString(media.Data))
+			data, err := llamaServerMediaBytes(media.Data)
+			if err != nil {
+				return err
+			}
+			mediaData = append(mediaData, base64.StdEncoding.EncodeToString(data))
 		}
 		lsReq.Prompt = llamaServerMultimodalPrompt{
 			PromptString:   promptStr,
@@ -1655,8 +1757,8 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 	buf := make([]byte, 0, llamaServerStreamInitialBufferSize)
 	scanner.Buffer(buf, llamaServerStreamMaxBufferSize)
 
-	var lastToken string
-	var tokenRepeat int
+	var repeat repeatGuard
+	var evalCount int
 	var finalResp CompletionResponse
 	var hasFinalResp bool
 
@@ -1683,22 +1785,36 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 				return fmt.Errorf("error unmarshalling llama-server response: %v", err)
 			}
 
-			// Token repeat detection
-			switch {
-			case strings.TrimSpace(lsResp.Content) == lastToken:
-				tokenRepeat++
-			default:
-				lastToken = strings.TrimSpace(lsResp.Content)
-				tokenRepeat = 0
+			if lsResp.Content != "" {
+				evalCount++
 			}
-			if tokenRepeat > 30 {
-				slog.Debug("prediction aborted, token repeat limit reached")
-				return ctx.Err()
+
+			// A generation that has come apart repeats one short unit until
+			// something stops it. Cut it off, and say so: the response is
+			// already partly streamed, so it ends as a normal completion with
+			// a reason the caller can act on.
+			if repeat.observe(lsResp.Content) {
+				slog.Warn("stopping generation, output repeated the same sequence past the limit",
+					"period", repeat.period(), "bytes", repeatGuardBudgetBytes)
+				if err := res.Body.Close(); err != nil {
+					return fmt.Errorf("error closing llama-server response: %v", err)
+				}
+				fn(CompletionResponse{
+					Done:       true,
+					DoneReason: DoneReasonRepeat,
+					EvalCount:  evalCount,
+				})
+				return nil
 			}
 
 			if lsResp.Content != "" && !lsResp.Stop {
-				resp := CompletionResponse{
-					Content: lsResp.Content,
+				resp := CompletionResponse{Content: lsResp.Content}
+				if req.IncludeIntermediateMetrics {
+					resp.PromptEvalCount = lsResp.Timings.promptEvalCount()
+					resp.PromptEvalCachedCount = lsResp.Timings.CacheN
+					resp.PromptEvalDuration = time.Duration(lsResp.Timings.PromptMS * float64(time.Millisecond))
+					resp.EvalCount = lsResp.Timings.PredictN
+					resp.EvalDuration = time.Duration(lsResp.Timings.PredictMS * float64(time.Millisecond))
 				}
 				resp.Logprobs = convertLogprobs(lsResp.CompletionProbabilities, req.TopLogprobs > 0)
 				fn(resp)
@@ -1711,13 +1827,14 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 				}
 
 				finalResp = CompletionResponse{
-					Content:            lsResp.Content,
-					Done:               true,
-					DoneReason:         doneReason,
-					PromptEvalCount:    lsResp.Timings.promptEvalCount(),
-					PromptEvalDuration: time.Duration(lsResp.Timings.PromptMS * float64(time.Millisecond)),
-					EvalCount:          lsResp.Timings.PredictN,
-					EvalDuration:       time.Duration(lsResp.Timings.PredictMS * float64(time.Millisecond)),
+					Content:               lsResp.Content,
+					Done:                  true,
+					DoneReason:            doneReason,
+					PromptEvalCount:       lsResp.Timings.promptEvalCount(),
+					PromptEvalCachedCount: lsResp.Timings.CacheN,
+					PromptEvalDuration:    time.Duration(lsResp.Timings.PromptMS * float64(time.Millisecond)),
+					EvalCount:             lsResp.Timings.PredictN,
+					EvalDuration:          time.Duration(lsResp.Timings.PredictMS * float64(time.Millisecond)),
 				}
 				hasFinalResp = true
 			}
@@ -2014,6 +2131,7 @@ func (s *llamaServerRunner) Chat(ctx context.Context, req ChatRequest, fn func(C
 				resp.Done = true
 				resp.DoneReason = doneReason
 				resp.PromptEvalCount = lsResp.Timings.promptEvalCount()
+				resp.PromptEvalCachedCount = lsResp.Timings.CacheN
 				resp.PromptEvalDuration = time.Duration(lsResp.Timings.PromptMS * float64(time.Millisecond))
 				resp.EvalCount = lsResp.Timings.PredictN
 				resp.EvalDuration = time.Duration(lsResp.Timings.PredictMS * float64(time.Millisecond))
@@ -2171,6 +2289,19 @@ func (s *llamaServerRunner) llamaServerChatRequest(req ChatRequest, stream bool)
 	if kwargs := llamaServerChatTemplateKwargs(req.Think); kwargs != nil {
 		body["chat_template_kwargs"] = kwargs
 	}
+	// llama-server owns the chat template on this path, so it already knows the
+	// thinking delimiters and only needs the budget.
+	window := api.ThinkBudgetWindow(s.ContextLength(), req.Options.NumPredict)
+	budget := req.Think.BudgetTokens(window)
+	if budget <= 0 {
+		budget = req.Options.ThinkBudget.BudgetTokens(window)
+	}
+	if budget > 0 {
+		body["thinking_budget_tokens"] = budget
+		// llama-server reads this from the chat body too, and needs it present
+		// to build the sequence it forces
+		body["reasoning_budget_message"] = req.Options.ThinkBudgetMessage
+	}
 	if format, err := llamaServerChatResponseFormat(req.Format); err != nil {
 		return nil, err
 	} else if format != nil {
@@ -2189,7 +2320,7 @@ func llamaServerChatTemplateKwargs(think *api.ThinkValue) map[string]any {
 		"enable_thinking": think.Bool(),
 	}
 	if think.IsString() {
-		if effort := think.String(); effort != "" {
+		if effort := think.Level(); effort != "" {
 			kwargs["reasoning_effort"] = effort
 		}
 	}
@@ -2227,34 +2358,58 @@ func llamaServerChatMessage(msg Message) (map[string]any, error) {
 		})
 	}
 	for _, media := range msg.Media {
-		parts = append(parts, llamaServerChatMediaPart(media))
+		part, err := llamaServerChatMediaPart(media)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, part)
 	}
 	converted["content"] = parts
 	return converted, nil
 }
 
-func llamaServerChatMediaPart(media MediaData) map[string]any {
-	encoded := base64.StdEncoding.EncodeToString(media.Data)
+func llamaServerChatMediaPart(media MediaData) (map[string]any, error) {
 	if format, ok := AudioFormat(media.Data); ok {
 		return map[string]any{
 			"type": "input_audio",
 			"input_audio": map[string]any{
-				"data":   encoded,
+				"data":   base64.StdEncoding.EncodeToString(media.Data),
 				"format": format,
 			},
-		}
+		}, nil
 	}
 
-	mime := http.DetectContentType(media.Data)
+	data, err := llamaServerMediaBytes(media.Data)
+	if err != nil {
+		return nil, err
+	}
+	mime := http.DetectContentType(data)
 	if !strings.HasPrefix(mime, "image/") {
 		mime = "image/jpeg"
 	}
 	return map[string]any{
 		"type": "image_url",
 		"image_url": map[string]any{
-			"url": "data:" + mime + ";base64," + encoded,
+			"url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
 		},
+	}, nil
+}
+
+func llamaServerMediaBytes(data []byte) ([]byte, error) {
+	if http.DetectContentType(data) != "image/webp" {
+		return data, nil
 	}
+
+	img, err := webp.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode WebP image: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encode WebP image as PNG: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 func llamaServerChatToolCalls(tcs []api.ToolCall) ([]llamaServerChatToolCall, error) {
@@ -2539,7 +2694,7 @@ func (s *llamaServerRunner) Detokenize(ctx context.Context, tokens []int) (strin
 }
 
 func (s *llamaServerRunner) Close() error {
-	return s.stopProcess()
+	return errors.Join(s.stopProcess(), s.removeSplitDirs())
 }
 
 func (s *llamaServerRunner) stopProcess() error {
@@ -2627,8 +2782,8 @@ func (s *llamaServerRunner) MemorySize() (total, vram uint64) {
 		// must be left intact. Weights cannot exceed the model file on disk, so
 		// trim that overlap from the mmap-backed (reclaimable page cache) portion.
 		if memCPUMappedModel > 0 {
-			if info, err := os.Stat(s.modelPath); err == nil && memModelFileBacked > uint64(info.Size()) {
-				total -= min(memCPUMappedModel, memModelFileBacked-uint64(info.Size()))
+			if modelSize := modelFileSize(s.modelPath, s.metadata); modelSize > 0 && memModelFileBacked > modelSize {
+				total -= min(memCPUMappedModel, memModelFileBacked-modelSize)
 			}
 		}
 		if totalLayers > 0 && gpuLayers >= totalLayers && gpuLayerOverflow == 0 {
@@ -2638,8 +2793,8 @@ func (s *llamaServerRunner) MemorySize() (total, vram uint64) {
 	}
 	// Fallback: use model file size as a rough proxy
 	slog.Debug("llama-server buffer sizes not available, falling back to file size estimate", "model", s.modelPath)
-	if info, err := os.Stat(s.modelPath); err == nil {
-		total = uint64(info.Size())
+	if modelSize := modelFileSize(s.modelPath, s.metadata); modelSize > 0 {
+		total = modelSize
 		vram = total
 	}
 	return total, vram
@@ -2648,11 +2803,8 @@ func (s *llamaServerRunner) MemorySize() (total, vram uint64) {
 // PredictServerVRAM estimates VRAM usage for a model without spawning llama-server.
 // Uses model file size as a proxy for weights plus a rough KV cache estimate.
 // This is intentionally conservative — it overestimates to avoid VRAM contention.
-func PredictServerVRAM(modelPath string, f *ggml.GGML, numCtx int) uint64 {
-	var weights uint64
-	if info, err := os.Stat(modelPath); err == nil {
-		weights = uint64(info.Size())
-	}
+func PredictServerVRAM(modelPath string, f *gguf.Model, numCtx int) uint64 {
+	weights := modelFileSize(modelPath, f)
 
 	// KV cache: 2 (K+V) * layers * kv_heads * head_dim * context * 2 bytes (f16)
 	layers := f.KV().BlockCount()

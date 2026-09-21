@@ -67,6 +67,8 @@ func TestBuiltInParsersStillWork(t *testing.T) {
 		{"qwen3.5"},
 		{"ornith"},
 		{"harmony"},
+		{"nemotron-3-nano"},
+		{"nemotron-3.5-nano"},
 	}
 
 	for _, tt := range tests {
@@ -307,6 +309,44 @@ func TestSplitAtTag(t *testing.T) {
 			// Check strings.Builder state
 			if sb.String() != tt.wantSB {
 				t.Errorf("strings.Builder after split = %q, want %q", sb.String(), tt.wantSB)
+			}
+		})
+	}
+}
+
+func TestThinkingTagsForParser(t *testing.T) {
+	tests := []struct {
+		name      string
+		parser    Parser
+		wantStart string
+		wantEnd   string
+	}{
+		{name: "nil parser", parser: nil},
+		{name: "gemma4", parser: &Gemma4Parser{hasThinkingSupport: true}, wantStart: "<|channel>", wantEnd: "<channel|>"},
+		{name: "gemma4 without thinking support", parser: &Gemma4Parser{}},
+		{name: "qwen3-thinking", parser: &Qwen3Parser{hasThinkingSupport: true}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "qwen3 non-thinking", parser: &Qwen3Parser{}},
+		{name: "qwen3.5", parser: &Qwen35Parser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "laguna", parser: &LagunaParser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "deepseek3", parser: &DeepSeek3Parser{hasThinkingSupport: true}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "deepseek3 non-thinking", parser: &DeepSeek3Parser{}},
+		{name: "cogito", parser: &CogitoParser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "olmo3-think", parser: &Olmo3ThinkParser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "qwen3-vl-thinking", parser: &Qwen3VLParser{hasThinkingSupport: true}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "qwen3-vl-instruct", parser: &Qwen3VLParser{}},
+		{name: "glm-4.6", parser: &GLM46Parser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "glm-4.7 inherits from glm-4.6", parser: &GLM47Parser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "lfm2-thinking", parser: &LFM2Parser{hasThinkingSupport: true}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "lfm2", parser: &LFM2Parser{}},
+		{name: "nemotron-3-nano", parser: &Nemotron3NanoParser{}, wantStart: "<think>", wantEnd: "</think>"},
+		{name: "parser without thinking tags", parser: &PassthroughParser{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end := ThinkingTagsForParser(tt.parser)
+			if start != tt.wantStart || end != tt.wantEnd {
+				t.Errorf("ThinkingTagsForParser() = (%q, %q), want (%q, %q)", start, end, tt.wantStart, tt.wantEnd)
 			}
 		})
 	}

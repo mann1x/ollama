@@ -23,6 +23,52 @@ type Parser interface {
 	HasThinkingSupport() bool
 }
 
+// ThinkingTagger is implemented by parsers that delimit thinking with literal
+// tags. The tags let a runner cap how many tokens are spent inside a thinking
+// block and force the block closed once the budget is exhausted.
+type ThinkingTagger interface {
+	// ThinkingTags returns the opening and closing delimiters of the thinking
+	// block, or empty strings when the parser has no such block.
+	ThinkingTags() (start, end string)
+}
+
+// ThinkingTagsForParser returns the thinking delimiters of a parser, if it
+// exposes any.
+func ThinkingTagsForParser(p Parser) (start, end string) {
+	if p == nil || !p.HasThinkingSupport() {
+		return "", ""
+	}
+	tagger, ok := p.(ThinkingTagger)
+	if !ok {
+		return "", ""
+	}
+	return tagger.ThinkingTags()
+}
+
+// ToolCallTagger is implemented by parsers that delimit tool calls with literal
+// tags. A runner spending a thinking budget across a whole response uses the
+// opening tag to tell circling apart from progress: thinking that led to a tool
+// call is work, and should not count against the thinking that follows it.
+type ToolCallTagger interface {
+	// ToolCallTags returns the opening and closing delimiters of a tool call,
+	// or empty strings when the parser has no such tags.
+	ToolCallTags() (start, end string)
+}
+
+// ToolCallStartTagForParser returns the tag a parser's tool calls open with, if
+// it exposes one.
+func ToolCallStartTagForParser(p Parser) string {
+	if p == nil || !p.HasToolSupport() {
+		return ""
+	}
+	tagger, ok := p.(ToolCallTagger)
+	if !ok {
+		return ""
+	}
+	start, _ := tagger.ToolCallTags()
+	return start
+}
+
 type ParserConstructor func() Parser
 
 type ParserRegistry struct {
@@ -76,7 +122,7 @@ func ParserForName(name string) Parser {
 		return &Olmo3Parser{}
 	case "olmo3-think":
 		return &Olmo3ThinkParser{}
-	case "nemotron-3-nano":
+	case "nemotron-3-nano", "nemotron-3.5-nano":
 		return &Nemotron3NanoParser{}
 	case "functiongemma":
 		return &FunctionGemmaParser{}

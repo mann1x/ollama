@@ -36,8 +36,9 @@ import (
 	"github.com/ollama/ollama/discover"
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
-	"github.com/ollama/ollama/fs/ggml"
+	"github.com/ollama/ollama/fs/gguf"
 	internalcloud "github.com/ollama/ollama/internal/cloud"
+	"github.com/ollama/ollama/internal/proxy"
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/manifest"
@@ -50,7 +51,6 @@ import (
 	"github.com/ollama/ollama/types/errtypes"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
-	xserver "github.com/ollama/ollama/x/server"
 )
 
 const signinURLStr = "https://ollama.com/connect?name=%s&key=%s"
@@ -118,8 +118,8 @@ func init() {
 }
 
 var (
-	errRequired    = errors.New("is required")
-	errBadTemplate = errors.New("template error")
+	errRequired            = errors.New("is required")
+	errTypicalPUnsupported = errors.New("typical_p is no longer supported")
 )
 
 func (s *Server) modelOptions(model *Model, requestOpts map[string]any) (api.Options, error) {
@@ -138,6 +138,9 @@ func (s *Server) modelOptionsWithEmbeddingBatchDefault(model *Model, requestOpts
 	draftNumPredictSet := hasOption(requestOpts, "draft_num_predict")
 	if model != nil {
 		draftNumPredictSet = draftNumPredictSet || hasOption(model.Options, "draft_num_predict")
+		if err := opts.FromMap(model.GenerationDefaults); err != nil {
+			return api.Options{}, err
+		}
 		if err := opts.FromMap(model.Options); err != nil {
 			return api.Options{}, err
 		}
@@ -199,22 +202,22 @@ func usesAutomaticNumBatch(model *Model, requestOpts map[string]any) bool {
 
 // scheduleRunner schedules a runner after validating inputs such as capabilities and model options.
 // It returns the allocated runner, model instance, and consolidated options if successful and error otherwise.
-func (s *Server) scheduleRunner(ctx context.Context, name string, caps []model.Capability, requestOpts map[string]any, keepAlive *api.Duration, shift *bool) (llm.LlamaServer, *Model, *api.Options, error) {
-	if name == "" {
+func (s *Server) scheduleRunner(ctx context.Context, model *Model, caps []model.Capability, requestOpts map[string]any, keepAlive *api.Duration, shift *bool) (llm.LlamaServer, *Model, *api.Options, error) {
+	if model == nil || model.Name == "" {
 		return nil, nil, nil, fmt.Errorf("model %w", errRequired)
-	}
-
-	model, err := GetModel(name)
-	if err != nil {
-		return nil, nil, nil, err
 	}
 
 	if slices.Contains(model.Config.ModelFamilies, "mllama") && len(model.ProjectorPaths) > 0 {
 		return nil, nil, nil, fmt.Errorf("'llama3.2-vision' is no longer compatible with your version of Ollama and has been replaced by a newer version. To re-download, run 'ollama pull llama3.2-vision'")
 	}
 
+	// null is unset, as in Options.FromMap
+	if requestOpts["typical_p"] != nil {
+		return nil, nil, nil, errTypicalPUnsupported
+	}
+
 	if err := model.CheckCapabilities(caps...); err != nil {
-		return nil, nil, nil, fmt.Errorf("%s %w", name, err)
+		return nil, nil, nil, fmt.Errorf("%s %w", model.Name, err)
 	}
 
 	numCtxAuto := usesAutomaticNumCtx(model, requestOpts)
@@ -431,12 +434,6 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 
 	var builtinParser parsers.Parser
 	if shouldUseHarmony(m) {
-		// harmony's Reasoning field only understands low/medium/high; map "max" to "high"
-		if req.Think != nil {
-			if s, ok := req.Think.Value.(string); ok && s == "max" {
-				req.Think.Value = "high"
-			}
-		}
 		if m.Config.Parser == "" {
 			m.Config.Parser = "harmony"
 		}
@@ -468,7 +465,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		}
 	}
 
-	r, m, opts, err := s.scheduleRunner(c.Request.Context(), name.String(), caps, req.Options, req.KeepAlive, req.Shift)
+	r, m, opts, err := s.scheduleRunner(c.Request.Context(), m, caps, req.Options, req.KeepAlive, req.Shift)
 	if errors.Is(err, errCapabilityCompletion) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%q does not support generate", req.Model)})
 		return
@@ -538,7 +535,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		values.Think = req.Think != nil && req.Think.Bool()
 		values.ThinkLevel = ""
 		if req.Think != nil {
-			values.ThinkLevel = req.Think.String()
+			values.ThinkLevel = req.Think.Level()
 		}
 		values.IsThinkSet = req.Think != nil
 
@@ -638,8 +635,12 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	var thinkingState *thinking.Parser
+	var openingTag, closingTag string
 	if builtinParser == nil {
-		openingTag, closingTag := thinking.InferTags(m.Template.Template)
+		openingTag, closingTag = thinking.InferTags(m.Template.Template)
+		if openingTag == "" || closingTag == "" {
+			openingTag, closingTag = m.ThinkOpenTag, m.ThinkCloseTag
+		}
 		if req.Think != nil && req.Think.Bool() && openingTag != "" && closingTag != "" {
 			thinkingState = &thinking.Parser{
 				OpeningTag: openingTag,
@@ -651,22 +652,33 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		}
 	}
 
+	thinkBudget, thinkBudgetApplied, thinkStartTag, thinkEndTag := thinkBudgetForCompletion(builtinParser, openingTag, closingTag, req.Think, opts)
+
 	ch := make(chan any)
 	go func() {
 		// TODO (jmorganca): avoid building the response twice both here and below
 		var sb strings.Builder
 		defer close(ch)
-		if err := r.Completion(c.Request.Context(), llm.CompletionRequest{
-			Prompt:          prompt,
-			Media:           media,
-			Format:          req.Format,
-			Options:         opts,
-			Shift:           req.Shift == nil || *req.Shift,
-			Truncate:        req.Truncate == nil || *req.Truncate,
-			Logprobs:        req.Logprobs,
-			TopLogprobs:     req.TopLogprobs,
-			PreservedTokens: preservedTokensForCompletion(builtinParser),
-			LeadingBOS:      leadingBOS,
+		ctx, cancel := context.WithCancel(c.Request.Context())
+		defer cancel()
+		var parserErr error
+
+		if err := r.Completion(ctx, llm.CompletionRequest{
+			Prompt:              prompt,
+			Media:               media,
+			Format:              req.Format,
+			Options:             opts,
+			Shift:               req.Shift == nil || *req.Shift,
+			Truncate:            req.Truncate == nil || *req.Truncate,
+			Logprobs:            req.Logprobs,
+			TopLogprobs:         req.TopLogprobs,
+			PreservedTokens:     preservedTokensForCompletion(builtinParser),
+			LeadingBOS:          leadingBOS,
+			ThinkBudget:         thinkBudget,
+			ThinkBudgetMessage:  opts.ThinkBudgetMessage,
+			ThinkingStartTag:    thinkStartTag,
+			ThinkingEndTag:      thinkEndTag,
+			ThinkBudgetResetTag: thinkBudgetResetTagForCompletion(builtinParser),
 		}, func(cr llm.CompletionResponse) {
 			res := api.GenerateResponse{
 				Model:     req.Model,
@@ -674,10 +686,11 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 				Response:  cr.Content,
 				Done:      cr.Done,
 				Metrics: api.Metrics{
-					PromptEvalCount:    cr.PromptEvalCount,
-					PromptEvalDuration: cr.PromptEvalDuration,
-					EvalCount:          cr.EvalCount,
-					EvalDuration:       cr.EvalDuration,
+					PromptEvalCount:       cr.PromptEvalCount,
+					PromptEvalCachedCount: cr.PromptEvalCachedCount,
+					PromptEvalDuration:    cr.PromptEvalDuration,
+					EvalCount:             cr.EvalCount,
+					EvalDuration:          cr.EvalDuration,
 				},
 				Logprobs: toAPILogprobs(cr.Logprobs),
 			}
@@ -685,7 +698,8 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 			if builtinParser != nil {
 				content, thinking, toolCalls, err := builtinParser.Add(cr.Content, cr.Done)
 				if err != nil {
-					ch <- gin.H{"error": err.Error()}
+					parserErr = err
+					cancel()
 					return
 				}
 				res.Response = content
@@ -705,6 +719,8 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 
 			if cr.Done {
 				res.DoneReason = cr.DoneReason.String()
+				res.ThinkBudget = thinkBudgetApplied
+				res.ThinkBudgetTokens = thinkBudget
 				res.TotalDuration = time.Since(checkpointStart)
 				res.LoadDuration = checkpointLoaded.Sub(checkpointStart)
 
@@ -731,13 +747,18 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 
 			ch <- res
 		}); err != nil {
-			s.sched.expireRunnersForRuntimeOOM(m, err)
-			var serr api.StatusError
-			if errors.As(err, &serr) {
-				ch <- gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode}
-			} else {
-				ch <- gin.H{"error": err.Error()}
+			if parserErr == nil {
+				s.sched.expireRunnersForRuntimeOOM(m, err)
+				var serr api.StatusError
+				if errors.As(err, &serr) {
+					ch <- gin.H{"error": serr.ErrorMessage, "status": serr.StatusCode}
+				} else {
+					ch <- gin.H{"error": err.Error()}
+				}
 			}
+		}
+		if parserErr != nil {
+			ch <- gin.H{"error": parserErr.Error()}
 		}
 	}()
 
@@ -839,7 +860,13 @@ func (s *Server) EmbedHandler(c *gin.Context) {
 		return
 	}
 
-	r, m, opts, err := s.scheduleRunner(c.Request.Context(), name.String(), []model.Capability{}, req.Options, req.KeepAlive, nil)
+	m, err := GetModel(name.String())
+	if err != nil {
+		handleScheduleError(c, req.Model, err)
+		return
+	}
+
+	r, m, opts, err := s.scheduleRunner(c.Request.Context(), m, []model.Capability{}, req.Options, req.KeepAlive, nil)
 	if err != nil {
 		handleScheduleError(c, req.Model, err)
 		return
@@ -852,19 +879,13 @@ func (s *Server) EmbedHandler(c *gin.Context) {
 		return
 	}
 
-	kvData, _, err := getModelData(m.ModelPath, false)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	ctx := c.Request.Context()
 
 	adjustTokenLimit := func(tokens []int, limit int) int {
-		if bos := kvData.Uint("tokenizer.ggml.bos_token_id"); len(tokens) > 0 && tokens[0] != int(bos) && kvData.Bool("add_bos_token", true) {
+		if bos := m.metadata.Int("tokenizer.ggml.bos_token_id"); len(tokens) > 0 && tokens[0] != int(bos) && m.metadata.Bool("add_bos_token", true) {
 			limit--
 		}
-		if eos := kvData.Uint("tokenizer.ggml.eos_token_id"); len(tokens) > 0 && tokens[len(tokens)-1] != int(eos) && kvData.Bool("add_eos_token", true) {
+		if eos := m.metadata.Int("tokenizer.ggml.eos_token_id"); len(tokens) > 0 && tokens[len(tokens)-1] != int(eos) && m.metadata.Bool("add_eos_token", true) {
 			limit--
 		}
 		return limit
@@ -877,7 +898,7 @@ func (s *Server) EmbedHandler(c *gin.Context) {
 		}
 
 		// TODO @nicolepardal: avoid reaching into kvData here; pass required tokenizer metadata via model/options instead
-		ctxLen := int(kvData.ContextLength())
+		ctxLen := int(m.metadata.Int("context_length"))
 		if opts.NumCtx > 0 {
 			ctxLen = min(opts.NumCtx, ctxLen)
 		}
@@ -1051,7 +1072,13 @@ func (s *Server) EmbeddingsHandler(c *gin.Context) {
 
 	name := modelRef.Name
 
-	r, m, _, err := s.scheduleRunner(c.Request.Context(), name.String(), []model.Capability{}, req.Options, req.KeepAlive, nil)
+	m, err := GetModel(name.String())
+	if err != nil {
+		handleScheduleError(c, req.Model, err)
+		return
+	}
+
+	r, m, _, err := s.scheduleRunner(c.Request.Context(), m, []model.Capability{}, req.Options, req.KeepAlive, nil)
 	if err != nil {
 		handleScheduleError(c, req.Model, err)
 		return
@@ -1130,8 +1157,6 @@ func (s *Server) PullHandler(c *gin.Context) {
 			ch <- gin.H{"error": err.Error()}
 			return
 		}
-
-		s.refreshModelListCache(name)
 	}()
 
 	if req.Stream != nil && !*req.Stream {
@@ -1271,9 +1296,9 @@ func (s *Server) DeleteHandler(c *gin.Context) {
 		return
 	}
 
-	s.deleteModelListCache(n)
-
-	if err := m.RemoveLayers(); err != nil {
+	removed, err := m.RemoveLayers()
+	removeGGUFMetadata(removed...)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1408,9 +1433,9 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		QuantizationLevel: m.Config.FileType,
 	}
 
-	// For safetensors LLM models (experimental), populate details from config.json
+	// For safetensors LLM models, populate details from config.json.
 	if m.Config.ModelFormat == "safetensors" && slices.Contains(m.Config.Capabilities, "completion") {
-		if info, err := xserver.GetSafetensorsLLMInfo(name); err == nil {
+		if info, err := getSafetensorsLLMInfo(name); err == nil {
 			if arch, ok := info["general.architecture"].(string); ok && arch != "" {
 				modelDetails.Family = arch
 			}
@@ -1420,7 +1445,7 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		}
 		// Older manifests may not have file_type populated for safetensors models.
 		if modelDetails.QuantizationLevel == "" {
-			if dtype, err := xserver.GetSafetensorsDtype(name); err == nil && dtype != "" {
+			if dtype, err := getSafetensorsDtype(name); err == nil && dtype != "" {
 				modelDetails.QuantizationLevel = dtype
 			}
 		}
@@ -1499,6 +1524,12 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		}
 	}
 
+	// After the request's options are merged, so a caller can ask what the
+	// budget would be under the options it intends to send rather than only
+	// under the model's own. That is the difference between a client reading a
+	// number and a client re-deriving one from a table it has to keep in step.
+	resp.ThinkBudget, resp.ThinkBudgetTokens = thinkBudgetForShow(req.Think, m.Options)
+
 	var sb strings.Builder
 	fmt.Fprintln(&sb, "# Modelfile generated by \"ollama show\"")
 	modelfile := m.String()
@@ -1519,14 +1550,14 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		return resp, nil
 	}
 
-	// For safetensors LLM models (experimental), populate ModelInfo from config.json
+	// For safetensors LLM models, populate ModelInfo from config.json.
 	if m.Config.ModelFormat == "safetensors" && slices.Contains(m.Config.Capabilities, "completion") {
-		if info, err := xserver.GetSafetensorsLLMInfo(name); err == nil {
+		if info, err := getSafetensorsLLMInfo(name); err == nil {
 			resp.ModelInfo = info
 		}
 		// Populate tensor info if verbose
 		if req.Verbose {
-			if tensors, err := xserver.GetSafetensorsTensorInfo(name); err == nil {
+			if tensors, err := getSafetensorsTensorInfo(name); err == nil {
 				resp.Tensors = tensors
 			}
 		}
@@ -1539,72 +1570,74 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 	if slices.Contains(m.Capabilities(), model.CapabilityImage) {
 		// Populate tensor info if verbose
 		if req.Verbose {
-			if tensors, err := xserver.GetSafetensorsTensorInfo(name); err == nil {
+			if tensors, err := getSafetensorsTensorInfo(name); err == nil {
 				resp.Tensors = tensors
 			}
 		}
 		return resp, nil
 	}
 
-	kvData, tensors, err := getModelData(m.ModelPath, req.Verbose)
+	kvData, tensors, err := getModelData(m.modelPaths(), req.Verbose)
 	if err != nil {
 		return nil, err
 	}
 
 	resp.Template = selectedModelTemplate(m, kvData)
 	if isUnknownQuantization(resp.Details.QuantizationLevel) {
-		if fileType := kvData.FileType().String(); !isUnknownQuantization(fileType) {
-			resp.Details.QuantizationLevel = fileType
+		if value := kvData.FileType().String(); !isUnknownQuantization(value) {
+			resp.Details.QuantizationLevel = value
 		}
 	}
 
-	delete(kvData, "general.name")
-	delete(kvData, "tokenizer.chat_template")
-	resp.ModelInfo = kvData
+	modelInfo := kvData.Values()
+	delete(modelInfo, "general.name")
+	delete(modelInfo, "tokenizer.chat_template")
+	resp.ModelInfo = modelInfo
 
-	tensorData := make([]api.Tensor, len(tensors.Items()))
-	for cnt, t := range tensors.Items() {
-		tensorData[cnt] = api.Tensor{Name: t.Name, Type: t.Type(), Shape: t.Shape}
+	if req.Verbose {
+		tensorItems := tensors.Items()
+		resp.Tensors = make([]api.Tensor, 0, len(tensorItems))
+		for _, tensor := range tensorItems {
+			tensorType := tensor.Type.String()
+			if tensorType != "unknown" {
+				tensorType = strings.ToUpper(tensorType)
+			}
+			resp.Tensors = append(resp.Tensors, api.Tensor{Name: tensor.Name, Type: tensorType, Shape: tensor.Shape})
+		}
 	}
-	resp.Tensors = tensorData
 
 	if len(m.ProjectorPaths) > 0 {
-		projectorData, _, err := getModelData(m.ProjectorPaths[0], req.Verbose)
+		projectorData, _, err := getModelData(m.ProjectorPaths[:1], req.Verbose)
 		if err != nil {
 			return nil, err
 		}
-		resp.ProjectorInfo = projectorData
+		projectorInfo := projectorData.Values()
+		resp.ProjectorInfo = projectorInfo
 	}
 
 	return resp, nil
 }
 
-func getModelData(digest string, verbose bool) (ggml.KV, ggml.Tensors, error) {
+func getModelData(paths []string, verbose bool) (*gguf.Metadata, gguf.Tensors, error) {
+	if len(paths) == 0 {
+		return nil, gguf.Tensors{}, os.ErrNotExist
+	}
+
 	maxArraySize := 0
 	if verbose {
 		maxArraySize = -1
 	}
-	data, err := llm.LoadModel(digest, maxArraySize)
+	data, err := llm.LoadModel(paths[0], maxArraySize, paths[1:]...)
 	if err != nil {
-		return nil, ggml.Tensors{}, err
+		return nil, gguf.Tensors{}, err
 	}
 
-	kv := data.KV()
-
-	if !verbose {
-		for k := range kv {
-			if t, ok := kv[k].([]any); len(t) > 5 && ok {
-				kv[k] = []any{}
-			}
-		}
-	}
-
-	return kv, data.Tensors(), nil
+	return data.KV(), data.Tensors(), nil
 }
 
-func selectedModelTemplate(m *Model, kv ggml.KV) string {
+func selectedModelTemplate(m *Model, kv *gguf.Metadata) string {
 	if m.HasChatTemplate && chatModeForModel(m) == chatExecutionModeNative {
-		if chatTemplate := kv.String("tokenizer.chat_template"); chatTemplate != "" {
+		if chatTemplate := kv.ChatTemplate(); chatTemplate != "" {
 			return chatTemplate
 		}
 	}
@@ -1612,12 +1645,7 @@ func selectedModelTemplate(m *Model, kv ggml.KV) string {
 }
 
 func (s *Server) ListHandler(c *gin.Context) {
-	if s.modelCaches == nil || s.modelCaches.modelList == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "model list cache unavailable"})
-		return
-	}
-
-	models, err := s.modelCaches.modelList.List(c.Request.Context())
+	models, err := listModels(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1662,8 +1690,6 @@ func (s *Server) CopyHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model %q not found", r.Source)})
 	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-	} else {
-		s.refreshModelListCache(dst)
 	}
 }
 
@@ -1674,8 +1700,11 @@ func (s *Server) HeadBlobHandler(c *gin.Context) {
 		return
 	}
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("blob %q not found", c.Param("digest"))})
+		return
+	} else if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -1683,25 +1712,6 @@ func (s *Server) HeadBlobHandler(c *gin.Context) {
 }
 
 func (s *Server) CreateBlobHandler(c *gin.Context) {
-	if ib, ok := intermediateBlobs[c.Param("digest")]; ok {
-		p, err := manifest.BlobsPath(ib)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
-			slog.Info("evicting intermediate blob which no longer exists", "digest", ib)
-			delete(intermediateBlobs, c.Param("digest"))
-		} else if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		} else {
-			c.Status(http.StatusOK)
-			return
-		}
-	}
-
 	path, err := manifest.BlobsPath(c.Param("digest"))
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1821,6 +1831,11 @@ func allowedHostsMiddleware(addr net.Addr) gin.HandlerFunc {
 }
 
 func (s *Server) GenerateRoutes() (http.Handler, error) {
+	codexDesktopProxy, err := newCodexDesktopProxy()
+	if err != nil {
+		return nil, err
+	}
+
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowWildcard = true
 	corsConfig.AllowBrowserExtensions = true
@@ -1861,6 +1876,9 @@ func (s *Server) GenerateRoutes() (http.Handler, error) {
 	r.HEAD("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
 	r.GET("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
 	r.GET("/api/status", s.StatusHandler)
+	// Codex uses this existing Ollama listener for both native and Ollama
+	// models. The proxy selects the upstream per request.
+	r.Any(proxy.CodexDesktopPathPrefix+"/*path", gin.WrapH(codexDesktopProxy))
 
 	// Local model cache management (new implementation is at end of function)
 	r.POST("/api/pull", s.PullHandler)
@@ -1900,7 +1918,8 @@ func (s *Server) GenerateRoutes() (http.Handler, error) {
 	r.POST("/v1/embeddings", cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), middleware.EmbeddingsMiddleware(), s.EmbedHandler)
 	r.GET("/v1/models", middleware.ListMiddleware(), s.ListHandler)
 	r.GET("/v1/models/:model", cloudModelPathPassthroughMiddleware(cloudErrRemoteModelDetailsUnavailable), middleware.RetrieveMiddleware(), s.ShowHandler)
-	r.POST("/v1/responses", s.withInferenceRequestLogging("/v1/responses", cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), middleware.ResponsesMiddleware(), s.ChatHandler)...)
+	r.POST("/v1/responses", s.withInferenceRequestLogging("/v1/responses", s.responsesCompactionMiddleware(), cloudPassthroughMiddleware(cloudErrRemoteInferenceUnavailable), middleware.ResponsesMiddleware(), s.ChatHandler)...)
+	r.POST("/v1/responses/compact", s.ResponsesCompactHandler)
 	// OpenAI-compatible audio endpoint
 	r.POST("/v1/audio/transcriptions", middleware.TranscriptionMiddleware(), s.ChatHandler)
 
@@ -1936,6 +1955,9 @@ func Serve(ln net.Listener) error {
 
 	blobsDir, err := manifest.BlobsPath("")
 	if err != nil {
+		return err
+	}
+	if err := llm.PruneSplitModelDirs(blobsDir, time.Now().Add(-layerPruneGracePeriod)); err != nil {
 		return err
 	}
 	if err := fixBlobs(blobsDir); err != nil {
@@ -2144,6 +2166,11 @@ func (s *Server) WebFetchExperimentalHandler(c *gin.Context) {
 }
 
 func (s *Server) webExperimentalProxyHandler(c *gin.Context, proxyPath, disabledOperation string) {
+	// This endpoint is authenticated by the server's cloud signature. A client
+	// may have supplied an unrelated provider credential (for example, Codex's
+	// Responses API key); it must not be sent to the web-search service.
+	c.Request.Header.Del("Authorization")
+
 	body, err := readRequestBody(c.Request)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -2295,6 +2322,148 @@ func preservedTokensForCompletion(builtinParser parsers.Parser) []string {
 	return nil
 }
 
+// thinkBudgetForCompletion resolves how many tokens a request may spend
+// thinking, together with the delimiters a runner needs to enforce that bound.
+// Models with a built-in parser report their own delimiters; the rest fall back
+// to the ones inferred from the Go template, which is what the generic thinking
+// parser splits on. A think value carrying its own budget wins over the model's
+// think_budget parameter. The budget is zero when thinking is unrestricted or
+// when there is no thinking block to close.
+//
+// The value that produced the budget is returned alongside it, because that is
+// what the response reports: a caller shown only a token count cannot tell a
+// level it sent from one the model carried.
+func thinkBudgetForCompletion(builtinParser parsers.Parser, templateStart, templateEnd string, think *api.ThinkValue, opts *api.Options) (budget int, applied *api.ThinkValue, start, end string) {
+	if opts == nil {
+		return 0, nil, "", ""
+	}
+
+	// Thinking switched off is not "no preference": it is an answer, and the
+	// model's own think_budget parameter must not overrule it. Without this the
+	// fallback below armed the model's budget on a request that asked for no
+	// reasoning at all -- 25,600 tokens for a `max` parameter against a 32,000
+	// num_predict -- which leaves the runner watching for a thinking block it
+	// was told would not exist, and able to write the forced-close message into
+	// a response whose caller wants no reasoning in it.
+	//
+	// Bool() is the predicate rather than a comparison against false, because
+	// thinking is switched off by more than one route and they do not agree on
+	// the value: `think: false` from the native API, `reasoning_effort: "none"`
+	// from the OpenAI-compatible one (thinkFromReasoningEffort turns it into the
+	// same bool), and `think: 0`, which Bool() already reads as off because a
+	// budget of no tokens is not a budget. A nil think is left alone -- that is
+	// a caller who said nothing, not one who said no, and a model with no
+	// thinking tags is already stopped by the check below.
+	if think != nil && !think.Bool() {
+		return 0, nil, "", ""
+	}
+
+	start, end = parsers.ThinkingTagsForParser(builtinParser)
+	if start == "" || end == "" {
+		start, end = templateStart, templateEnd
+	}
+	if start == "" || end == "" {
+		return 0, nil, "", ""
+	}
+
+	window := api.ThinkBudgetWindow(opts.NumCtx, opts.NumPredict)
+	budget, applied = think.BudgetTokens(window), think
+	if budget <= 0 {
+		budget, applied = opts.ThinkBudget.BudgetTokens(window), opts.ThinkBudget
+	}
+	if budget <= 0 {
+		return 0, nil, "", ""
+	}
+	return budget, applied, start, end
+}
+
+// thinkBudgetForShow answers what a completion would be bounded by, without
+// running one: the budget that would apply, and the tokens it would resolve to,
+// against whichever think value and options the caller asked about.
+//
+// Precedence is the completion path's, because an answer that disagreed with it
+// would be worse than no answer: a think value carrying its own budget wins
+// over the model's `think_budget` parameter. That parameter already reaches a
+// caller inside Parameters, but only as a line of text to parse, and a level
+// there says nothing about the tokens it stands for.
+//
+// A model whose options set neither num_predict nor num_ctx has no window to
+// resolve against here — the runtime default supplies one only once a request
+// arrives — so the count is left at zero and omitted, and the responses report
+// the figure that actually applied.
+func thinkBudgetForShow(think *api.ThinkValue, options map[string]any) (*api.ThinkValue, int) {
+	// The same answer the completion path gives, for the same reason: asked
+	// about a think value that switches thinking off, the model's own
+	// think_budget is not what would apply.
+	if think != nil && !think.Bool() {
+		return nil, 0
+	}
+
+	numCtx, _ := optionAsInt(options["num_ctx"])
+	numPredict, _ := optionAsInt(options["num_predict"])
+	window := api.ThinkBudgetWindow(numCtx, numPredict)
+
+	if budget := think.BudgetTokens(window); budget > 0 {
+		return think, budget
+	}
+
+	raw, ok := options["think_budget"]
+	if !ok {
+		return nil, 0
+	}
+
+	fromModel := &api.ThinkValue{}
+	switch v := raw.(type) {
+	case string:
+		fromModel.Value = v
+	case bool:
+		fromModel.Value = v
+	default:
+		count, ok := optionAsInt(raw)
+		if !ok {
+			return nil, 0
+		}
+		fromModel.Value = count
+	}
+
+	budget := fromModel.BudgetTokens(window)
+	if budget <= 0 {
+		return nil, 0
+	}
+	return fromModel, budget
+}
+
+// optionAsInt reads a numeric Modelfile parameter. Values arrive as whichever
+// numeric type the parameter was decoded into, so all of them are accepted
+// rather than the one a given path happens to produce.
+func optionAsInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case uint32:
+		return int(v), true
+	case uint64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+// thinkBudgetResetTagForCompletion reports the tag whose appearance forgives the
+// thinking spent so far, which is the tag a tool call opens with. Parsers that
+// do not name one leave the budget cumulative with nothing to forgive it.
+func thinkBudgetResetTagForCompletion(builtinParser parsers.Parser) string {
+	return parsers.ToolCallStartTagForParser(builtinParser)
+}
+
 func toolCallTagForCompletion(toolParser *tools.Parser) string {
 	if toolParser == nil {
 		return ""
@@ -2341,8 +2510,10 @@ func chatModeForModel(m *Model) chatExecutionMode {
 
 func llamaServerConfigForModel(m *Model) llm.LlamaServerConfig {
 	return llm.LlamaServerConfig{
-		DisableJinja:   usesOllamaRenderedChat(m),
-		DraftModelPath: m.DraftPath,
+		DisableJinja:         usesOllamaRenderedChat(m),
+		ManifestDigest:       m.Digest,
+		DraftModelPath:       m.DraftPath,
+		DraftModelShardPaths: slices.Clone(m.DraftShardPaths),
 	}
 }
 
@@ -2439,7 +2610,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 	if modelRef.Source == modelSourceCloud {
 		req.Model = modelRef.Base
-		if c.GetBool(legacyCloudAnthropicKey) {
+		if c.GetBool(cloudWebSearchOrchestrationKey) {
 			proxyCloudJSONRequestWithPath(c, req, "/api/chat", cloudErrRemoteInferenceUnavailable)
 			return
 		}
@@ -2608,7 +2779,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		}
 	}
 
-	r, m, opts, err := s.scheduleRunner(c.Request.Context(), name.String(), caps, req.Options, req.KeepAlive, req.Shift)
+	r, m, opts, err := s.scheduleRunner(c.Request.Context(), m, caps, req.Options, req.KeepAlive, req.Shift)
 	if errors.Is(err, errCapabilityCompletion) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%q does not support chat", req.Model)})
 		return
@@ -2637,12 +2808,6 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	msgs = filterThinkTags(msgs, m)
 
 	if shouldUseHarmony(m) {
-		// harmony's Reasoning field only understands low/medium/high; map "max" to "high"
-		if req.Think != nil {
-			if s, ok := req.Think.Value.(string); ok && s == "max" {
-				req.Think.Value = "high"
-			}
-		}
 		if m.Config.Parser == "" {
 			m.Config.Parser = "harmony"
 		}
@@ -2696,6 +2861,9 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 	var thinkingState *thinking.Parser
 	openingTag, closingTag := thinking.InferTags(m.Template.Template)
+	if openingTag == "" || closingTag == "" {
+		openingTag, closingTag = m.ThinkOpenTag, m.ThinkCloseTag
+	}
 	if req.Think != nil && req.Think.Bool() && openingTag != "" && closingTag != "" {
 		thinkingState = &thinking.Parser{
 			OpeningTag: openingTag,
@@ -2719,11 +2887,14 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		structuredOutputsState_Applying
 	)
 
+	thinkBudget, thinkBudgetApplied, thinkStartTag, thinkEndTag := thinkBudgetForCompletion(builtinParser, openingTag, closingTag, req.Think, opts)
+
 	ch := make(chan any)
 	go func() {
 		defer close(ch)
 
 		structuredOutputsState := structuredOutputsState_None
+		var firstPassMetrics api.Metrics
 
 		for {
 			var tb strings.Builder
@@ -2742,39 +2913,66 @@ func (s *Server) ChatHandler(c *gin.Context) {
 			if req.Format != nil && structuredOutputsState == structuredOutputsState_None && !forceImmediate && ((builtinParser != nil || thinkingState != nil) && slices.Contains(m.Capabilities(), model.CapabilityThinking)) {
 				currentFormat = nil
 			}
+			includeIntermediateMetrics := req.Format != nil && currentFormat == nil
 
 			// sets up new context given parent context per request
 			ctx, cancel := context.WithCancel(c.Request.Context())
 
+			var parserErr error
+
 			err := r.Completion(ctx, llm.CompletionRequest{
-				Prompt:          prompt,
-				Media:           media,
-				Format:          currentFormat,
-				Options:         opts,
-				Shift:           req.Shift == nil || *req.Shift,
-				Truncate:        truncate,
-				Logprobs:        req.Logprobs,
-				TopLogprobs:     req.TopLogprobs,
-				PreservedTokens: preservedTokensForCompletion(builtinParser),
-				ToolCallTag:     toolCallTagForCompletion(toolParser),
-				LeadingBOS:      leadingBOSForModel(m),
+				Prompt:                     prompt,
+				Media:                      media,
+				Format:                     currentFormat,
+				Options:                    opts,
+				Shift:                      req.Shift == nil || *req.Shift,
+				Truncate:                   truncate,
+				Logprobs:                   req.Logprobs,
+				TopLogprobs:                req.TopLogprobs,
+				PreservedTokens:            preservedTokensForCompletion(builtinParser),
+				ToolCallTag:                toolCallTagForCompletion(toolParser),
+				LeadingBOS:                 leadingBOSForModel(m),
+				IncludeIntermediateMetrics: includeIntermediateMetrics,
+				ThinkBudget:                thinkBudget,
+				ThinkBudgetMessage:         opts.ThinkBudgetMessage,
+				ThinkingStartTag:           thinkStartTag,
+				ThinkingEndTag:             thinkEndTag,
+				ThinkBudgetResetTag:        thinkBudgetResetTagForCompletion(builtinParser),
 			}, func(r llm.CompletionResponse) {
+				metrics := api.Metrics{
+					PromptEvalCount:       r.PromptEvalCount,
+					PromptEvalCachedCount: r.PromptEvalCachedCount,
+					PromptEvalDuration:    r.PromptEvalDuration,
+					EvalCount:             r.EvalCount,
+					EvalDuration:          r.EvalDuration,
+				}
+				if includeIntermediateMetrics {
+					firstPassMetrics = metrics
+					if !r.Done {
+						metrics = api.Metrics{}
+					}
+				} else if structuredOutputsState == structuredOutputsState_Applying && r.Done {
+					// Treat the restart as generation work: retain the original prompt metrics and fold in the second prefill.
+					metrics.PromptEvalCount = firstPassMetrics.PromptEvalCount
+					metrics.PromptEvalCachedCount = firstPassMetrics.PromptEvalCachedCount
+					metrics.PromptEvalDuration = firstPassMetrics.PromptEvalDuration
+					metrics.EvalCount += firstPassMetrics.EvalCount
+					metrics.EvalDuration += firstPassMetrics.EvalDuration + r.PromptEvalDuration
+				}
+
 				res := api.ChatResponse{
 					Model:     req.Model,
 					CreatedAt: time.Now().UTC(),
 					Message:   api.Message{Role: "assistant", Content: r.Content},
 					Done:      r.Done,
-					Metrics: api.Metrics{
-						PromptEvalCount:    r.PromptEvalCount,
-						PromptEvalDuration: r.PromptEvalDuration,
-						EvalCount:          r.EvalCount,
-						EvalDuration:       r.EvalDuration,
-					},
-					Logprobs: toAPILogprobs(r.Logprobs),
+					Metrics:   metrics,
+					Logprobs:  toAPILogprobs(r.Logprobs),
 				}
 
 				if r.Done {
 					res.DoneReason = r.DoneReason.String()
+					res.ThinkBudget = thinkBudgetApplied
+					res.ThinkBudgetTokens = thinkBudget
 					res.TotalDuration = time.Since(checkpointStart)
 					res.LoadDuration = checkpointLoaded.Sub(checkpointStart)
 				}
@@ -2784,12 +2982,14 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 					content, thinking, toolCalls, err := builtinParser.Add(r.Content, r.Done)
 					if err != nil {
-						ch <- gin.H{"error": err.Error()}
+						parserErr = err
+						cancel()
 						return
 					}
 
 					res.Message.Content = content
 					res.Message.Thinking = thinking
+					toolCalls = completeToolCalls(toolCalls, req.Tools, r.Done && r.DoneReason == llm.DoneReasonLength)
 					for i := range toolCalls {
 						toolCalls[i].ID = toolCallId()
 					}
@@ -2834,6 +3034,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 				if len(req.Tools) > 0 {
 					toolCalls, content := toolParser.Add(res.Message.Content)
+					toolCalls = completeToolCalls(toolCalls, req.Tools, r.Done && r.DoneReason == llm.DoneReasonLength)
 					if len(content) > 0 {
 						res.Message.Content = content
 					} else if len(toolCalls) > 0 {
@@ -2863,6 +3064,10 @@ func (s *Server) ChatHandler(c *gin.Context) {
 
 				ch <- res
 			})
+			if parserErr != nil {
+				ch <- gin.H{"error": parserErr.Error()}
+				return
+			}
 			if err != nil {
 				if structuredOutputsState == structuredOutputsState_ReadyToApply && strings.Contains(err.Error(), "context canceled") && c.Request.Context().Err() == nil {
 					// only ignores error if it's a context cancellation due to setting structured outputs
@@ -2973,10 +3178,11 @@ func (s *Server) handleNativeChat(c *gin.Context, req api.ChatRequest, m *Model,
 				Message:   r.Message,
 				Done:      r.Done,
 				Metrics: api.Metrics{
-					PromptEvalCount:    r.PromptEvalCount,
-					PromptEvalDuration: r.PromptEvalDuration,
-					EvalCount:          r.EvalCount,
-					EvalDuration:       r.EvalDuration,
+					PromptEvalCount:       r.PromptEvalCount,
+					PromptEvalCachedCount: r.PromptEvalCachedCount,
+					PromptEvalDuration:    r.PromptEvalDuration,
+					EvalCount:             r.EvalCount,
+					EvalDuration:          r.EvalDuration,
 				},
 				Logprobs: toAPILogprobs(r.Logprobs),
 			}
@@ -3076,7 +3282,7 @@ func countChatImages(msgs []api.Message) int {
 
 func handleScheduleError(c *gin.Context, name string, err error) {
 	switch {
-	case errors.Is(err, errCapabilities), errors.Is(err, errRequired):
+	case errors.Is(err, errCapabilities), errors.Is(err, errRequired), errors.Is(err, errTypicalPUnsupported):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, context.Canceled):
 		c.JSON(499, gin.H{"error": "request canceled"})

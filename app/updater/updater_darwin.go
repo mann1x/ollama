@@ -149,7 +149,7 @@ func DoUpgrade(interactive bool) error {
 		}
 	}
 
-	// Get ready to try to unwind a partial upgade failure during unzip
+	// Get ready to try to unwind a partial upgrade failure during unzip
 	// If something goes wrong, we attempt to put the old version back.
 	anyFailures := false
 	defer func() {
@@ -418,13 +418,7 @@ func getStagedUpdate() string {
 		slog.Debug("failed to lookup downloads", "error", err)
 		return ""
 	}
-	if len(files) == 0 {
-		return ""
-	} else if len(files) > 1 {
-		// Shouldn't happen
-		slog.Warn("multiple update downloads found, using first one", "bundles", files)
-	}
-	return files[0]
+	return consentedStagedUpdate(files)
 }
 
 func IsUpdatePending() bool {
@@ -434,7 +428,7 @@ func IsUpdatePending() bool {
 func chownWithAuthorization(user string) bool {
 	u := C.CString(user)
 	defer C.free(unsafe.Pointer(u))
-	return (bool)(C.chownWithAuthorization(u))
+	return bool(C.chownWithAuthorization(u))
 }
 
 func verifyExtractedBundle(path string) error {

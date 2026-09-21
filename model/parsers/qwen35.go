@@ -34,6 +34,7 @@ type Qwen35Parser struct {
 	// Some checkpoints may emit an explicit leading <think> even when the
 	// prompt already opened thinking. Strip at most one such tag.
 	allowLeadingThinkOpenTag bool
+	trimLeadingThinkingSpace bool
 }
 
 func (p *Qwen35Parser) HasToolSupport() bool {
@@ -42,6 +43,29 @@ func (p *Qwen35Parser) HasToolSupport() bool {
 
 func (p *Qwen35Parser) HasThinkingSupport() bool {
 	return true
+}
+
+// ThinkingTags reports the delimiters of this parser's thinking block so a
+// thinking-token budget can force the block closed.
+func (p *Qwen35Parser) ThinkingTags() (string, string) {
+	return qwen35ThinkingOpenTag, qwen35ThinkingCloseTag
+}
+
+// ToolCallTags reports the delimiters of this parser's tool calls, so a
+// response-wide thinking budget can forgive what was spent getting to one.
+//
+// Naming them is opt-in: a parser that names none leaves the budget cumulative
+// across the whole response, which is safe but means a long agentic turn runs
+// out of thinking after its first few steps. gemma4 was the only parser to name
+// its tags when the response-scope budget landed, because it was the only one
+// measured; on qwen3.5 the budget was silently cumulative for the same reason.
+//
+// The tag has to be a single special token or the reset would fire on prose
+// that merely spells it, since the sampler matches a token sequence rather than
+// text. It is: `<tool_call>` is token 248058 of type USER_DEFINED in the
+// qwen3.5 vocab, the same property gemma4's `<|tool_call>` has.
+func (p *Qwen35Parser) ToolCallTags() (string, string) {
+	return toolOpenTag, toolCloseTag
 }
 
 func (p *Qwen35Parser) PreservedTokens() []string {
@@ -67,9 +91,11 @@ func (p *Qwen35Parser) Init(tools []api.Tool, lastMessage *api.Message, thinkVal
 	if thinkingEnabled && !assistantPrefill {
 		p.state = qwen35ParserStateCollectingThinking
 		p.allowLeadingThinkOpenTag = true
+		p.trimLeadingThinkingSpace = false
 	} else {
 		p.state = qwen35ParserStateCollectingContent
 		p.allowLeadingThinkOpenTag = false
+		p.trimLeadingThinkingSpace = false
 	}
 
 	return tools
@@ -162,10 +188,11 @@ func (p *Qwen35Parser) maybeConsumeLeadingThinkOpenTag(acc string) (bool, bool) 
 		after = strings.TrimLeftFunc(after, unicode.IsSpace)
 		p.buffer.Reset()
 		p.buffer.WriteString(after)
+		p.allowLeadingThinkOpenTag = false
+		p.trimLeadingThinkingSpace = after == ""
 		if after == "" {
 			return true, false
 		}
-		p.allowLeadingThinkOpenTag = false
 		return true, true
 	}
 
@@ -186,6 +213,15 @@ func (p *Qwen35Parser) eat() ([]qwen35Event, bool) {
 
 		if handled, continueNow := p.maybeConsumeLeadingThinkOpenTag(acc); handled {
 			return events, continueNow
+		}
+		if p.trimLeadingThinkingSpace {
+			acc = strings.TrimLeftFunc(acc, unicode.IsSpace)
+			p.buffer.Reset()
+			p.buffer.WriteString(acc)
+			if acc == "" {
+				return events, false
+			}
+			p.trimLeadingThinkingSpace = false
 		}
 
 		if strings.Contains(acc, qwen35ThinkingCloseTag) {

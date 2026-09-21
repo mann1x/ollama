@@ -120,6 +120,7 @@ func TestConcurrency(t *testing.T) {
 func TestTools(t *testing.T) {
 	runIntegrationGroup(t,
 		"tools",
+		"tools-routes",
 		"tools-stress",
 	)
 }
@@ -128,15 +129,12 @@ func TestCreate(t *testing.T) {
 	runIntegrationGroup(t,
 		"create-safetensors",
 		"create-gguf",
+		"create-gguf-blob-transfer",
 	)
 }
 
 func TestQuantization(t *testing.T) {
 	runIntegrationGroup(t, "quantization")
-}
-
-func TestImageGeneration(t *testing.T) {
-	runIntegrationGroup(t, "image-generation")
 }
 
 func testName(s string) string {
