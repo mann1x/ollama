@@ -2,15 +2,41 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Nothing new in the thinking-budget work itself.** Same feature set as the
-0.34.0 test build, rebased onto Ollama **0.34.2**.
+**One parser fix, and it is the reason this build exists.**
 
-Two things changed on the way across, both ours rather than upstream's:
+`Gemma4CollectingThinking` scanned for a single tag, `<channel|>`. Content state
+has always scanned for two — the thinking open tag *and* the tool-call open tag
+— and thinking state was the asymmetric one. So a Gemma 4 model that opens a
+tool call before it closes its thinking channel had the entire call collected as
+reasoning. Captured verbatim at the end of a 17,325-character thinking block:
+
+```
+Let's go.<|tool_call>call:editor{end_line:91,...}<tool_call|><|tool_response>
+```
+
+Complete, well-formed, and invisible. The caller saw a turn with no tool calls,
+ended the run, and the edit was never made — from outside it looks like the
+model stopped mid-task for no reason. The other half of the symptom is the
+special tokens themselves reaching the client as chat text, since nothing
+consumed them.
+
+Thinking state now takes whichever of the two tags comes first, so a close tag
+followed by a call still goes down the ordinary path and nothing about the
+well-formed case changes. The partial-tag check spans both tags, because the
+open tag streams in across chunks and holding back only a partial `<channel|>`
+would emit `<|tool` as reasoning before the rest arrived.
+
+This is proposed upstream to the fork's `main` as
+[mann1x/ollama#7](https://github.com/mann1x/ollama/pull/7). It affects Gemma 4
+only; no other parser and nothing in the thinking-budget work is touched.
+
+**Everything else is identical to the `0.34.2-thinkbudget` build** — same
+feature set, same rebase onto Ollama 0.34.2, same `/api/show` cache keying on
+the think value. The two carried-over notes from that build still apply:
 
 - `TestShowThinkBudget` follows 0.34.2's move from `fs/ggml`'s `KV` to
-  `internal/testutil/gguf`'s. It was the one call site still naming the old
-  one, and `go build ./...` stays green over it — a test file is not built by
-  it, so `go vet ./server/...` is what says `undefined: ggml`.
+  `internal/testutil/gguf`'s. `go build ./...` stays green over it — a test file
+  is not built by it, so `go vet ./server/...` is what says `undefined: ggml`.
 - The repeat guard is kept over upstream's `tokenRepeat > 100` check, which is
   the same deliberate replacement this series has carried since 0.32.
 
