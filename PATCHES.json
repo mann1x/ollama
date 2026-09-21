@@ -23,7 +23,8 @@
   },
   "verification": {
     "per_patch": "go build ./... plus go vet and go test on every package the patch touches, run on the rebased branch at the sha below",
-    "apply_order": "the full sequence was replayed as sequential --no-ff merges from v0.34.2; see known_conflicts"
+    "apply_order": "the full sequence was replayed as sequential --no-ff merges from v0.34.2; see known_conflicts",
+    "full_tree": "v0.34.2 + patches 4, 5, 8, 14, 15, 16, 17 and the stacked 18, replayed as --no-ff merges: gofmt -l silent tree-wide, go build ./... clean, go vet ./... clean, go test ./... ok=56 fail=0 no-tests=22. Measured 2026-09-21 on solidPC (linux/amd64, root, tmpfs /tmp)."
   },
   "patches": [
     {
@@ -219,6 +220,46 @@
       ],
       "title": "parsers: let a parser name the tags its tool calls open with",
       "status": "fork-only"
+    },
+    {
+      "slug": "up-codex-request-count-mtime",
+      "branch": "up-codex-request-count-mtime",
+      "sha": "bf047765",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "cmd/launch/codex_app_profile.go",
+        "cmd/launch/codex_app_mtime_test.go"
+      ],
+      "title": "launch: a session file stamped before the clock said start is not old",
+      "status": "fork-only",
+      "note": "Real defect, not a test artifact. codexAppRequestCursor.scan compares a filesystem mtime against a time.Now() taken moments earlier; tmpfs stamps mtime from the kernel's coarse clock, measured 4.55ms behind at CONFIG_HZ=250, so the rollout file is judged older than the session that just created it and skipped for the life of that session -- the count stays 0 however many prompts are sent. Two seconds of slack; the exact per-line filter is unchanged. Fixes TestCodexAppCountsOnlyOllamaRequestsInRegularProfile, which fails on any host whose temp dir is tmpfs. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
+    },
+    {
+      "slug": "up-fileutil-root-permission-tests",
+      "branch": "up-fileutil-root-permission-tests",
+      "sha": "e153344b",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "cmd/internal/fileutil/files_test.go"
+      ],
+      "title": "fileutil: three permission tests assert the runner, not the code",
+      "status": "fork-only",
+      "note": "Test-only. TestWriteWithBackup_{PermissionDenied,FailsIfBackupFails,FileUnreadableButDirWritable} chmod a path then demand an error; root has CAP_DAC_OVERRIDE and gets nil, so they fail for every build run as root, which is the container case. They already skip on Windows for the neighbouring reason; this folds both into one helper. Only those three -- the other twelve pass as root and still run. Measured after: root 12 pass 3 skip, unprivileged 15 pass 0 skip. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
+    },
+    {
+      "slug": "up-gofmt-vision-test-data",
+      "branch": "up-gofmt-vision-test-data",
+      "sha": "09e76dda",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "integration/vision_test_data_test.go"
+      ],
+      "title": "integration: gofmt vision_test_data_test.go",
+      "status": "fork-only",
+      "note": "One blank line. This is the only file `gofmt -l ./...` names on v0.34.2, so a silent-gofmt gate has to special-case it otherwise. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
     },
     {
       "slug": "up-response-scope-think-budget",
