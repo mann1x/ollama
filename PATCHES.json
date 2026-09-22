@@ -10,7 +10,7 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.2",
-  "updated": "2026-09-21",
+  "updated": "2026-09-22",
   "integration": {
     "branch": "think-budget",
     "sha": "d57818e3",
@@ -233,7 +233,7 @@
       ],
       "title": "launch: a session file stamped before the clock said start is not old",
       "status": "fork-only",
-      "note": "Real defect, not a test artifact. codexAppRequestCursor.scan compares a filesystem mtime against a time.Now() taken moments earlier; tmpfs stamps mtime from the kernel's coarse clock, measured 4.55ms behind at CONFIG_HZ=250, so the rollout file is judged older than the session that just created it and skipped for the life of that session -- the count stays 0 however many prompts are sent. Two seconds of slack; the exact per-line filter is unchanged. Fixes TestCodexAppCountsOnlyOllamaRequestsInRegularProfile, which fails on any host whose temp dir is tmpfs. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
+      "note": "Real defect, not a test artifact. codexAppRequestCursor.scan compares a filesystem mtime against a time.Now() taken moments earlier; tmpfs stamps mtime from the kernel's coarse clock, measured 4.55ms behind at CONFIG_HZ=250, so the rollout file is judged older than the session that just created it and skipped for the life of that session -- the count stays 0 however many prompts are sent. Two seconds of slack; the exact per-line filter is unchanged. Fixes TestCodexAppCountsOnlyOllamaRequestsInRegularProfile, which fails on any host whose temp dir is tmpfs. Not going upstream: ruled 2026-09-22, no PR to be filed. fork-only is the settled status, not a placeholder."
     },
     {
       "slug": "up-fileutil-root-permission-tests",
@@ -246,7 +246,7 @@
       ],
       "title": "fileutil: three permission tests assert the runner, not the code",
       "status": "fork-only",
-      "note": "Test-only. TestWriteWithBackup_{PermissionDenied,FailsIfBackupFails,FileUnreadableButDirWritable} chmod a path then demand an error; root has CAP_DAC_OVERRIDE and gets nil, so they fail for every build run as root, which is the container case. They already skip on Windows for the neighbouring reason; this folds both into one helper. Only those three -- the other twelve pass as root and still run. Measured after: root 12 pass 3 skip, unprivileged 15 pass 0 skip. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
+      "note": "Test-only. TestWriteWithBackup_{PermissionDenied,FailsIfBackupFails,FileUnreadableButDirWritable} chmod a path then demand an error; root has CAP_DAC_OVERRIDE and gets nil, so they fail for every build run as root, which is the container case. They already skip on Windows for the neighbouring reason; this folds both into one helper. Only those three -- the other twelve pass as root and still run. Measured after: root 12 pass 3 skip, unprivileged 15 pass 0 skip. Not going upstream: ruled 2026-09-22, no PR to be filed. fork-only is the settled status, not a placeholder."
     },
     {
       "slug": "up-gofmt-vision-test-data",
@@ -259,7 +259,7 @@
       ],
       "title": "integration: gofmt vision_test_data_test.go",
       "status": "fork-only",
-      "note": "One blank line. This is the only file `gofmt -l ./...` names on v0.34.2, so a silent-gofmt gate has to special-case it otherwise. UPSTREAM CANDIDATE: no PR filed yet, pending a decision."
+      "note": "One blank line. This is the only file `gofmt -l ./...` names on v0.34.2, so a silent-gofmt gate has to special-case it otherwise. Not going upstream: ruled 2026-09-22, no PR to be filed. fork-only is the settled status, not a placeholder."
     },
     {
       "slug": "up-response-scope-think-budget",
