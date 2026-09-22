@@ -138,7 +138,7 @@
       ],
       "title": "llama: end a spent reasoning budget at a line, not mid-word",
       "status": "open-upstream",
-      "note": "UNRESOLVED, flagged 2026-09-21: this branch's copy of llama/compat/004-reasoning-budget-line-boundary.patch (825 lines) and think-budget's (945 lines) have drifted in BOTH directions, so neither is a superset. Only here: the --reasoning-budget-scope CLI flag and the THINK_BUDGET_SCOPE env var (the upstream-facing surface; ollama sets the scope per-request over the wire instead). Only on think-budget, and reaching nobody through this manifest: ca2e2cdb (reset_tokens), b4c58eee (forced_end_pos, common_reasoning_budget_end_offset -- the fix for a spent response repeating its wrap-up message once per reopened block, measured 32x in one turn), and the llama.cpp half of 677f91ce (reset_tokens, start_tokens). c044b553 is NOT affected: its content was folded in when this branch was rebased. A consumer merging this branch gets the flag and silently loses those three. Needs a decision from this branch's owner; not resolved unilaterally because #18212 is open upstream."
+      "note": "004 DRIFT CLOSED 2026-09-22 by up-response-scope-think-budget, which now carries the union. This branch keeps the upstream-facing surface -- the --reasoning-budget-scope flag and the THINK_BUDGET_SCOPE env var -- which ollama does not use because it sets scope per request over the wire; that is deliberate and stays. Correcting what this note said before: only ONE of the three commits was genuinely absent here. 677f91ce's C++ is SUPERSEDED (this branch has the later form; reset_tokens was renamed reset_seqs and the type generalised to vector<llama_tokens>, so an identifier test read it as missing). ca2e2cdb is OBSOLETE (it ports to b10242; LLAMA_CPP_VERSION pins b10969). b4c58eee was the real gap and is now carried."
     },
     {
       "slug": "up-native-thinking-replay",
@@ -264,7 +264,7 @@
     {
       "slug": "up-response-scope-think-budget",
       "branch": "up-response-scope-think-budget",
-      "sha": "fdf0d23c",
+      "sha": "3c5d29b4",
       "upstream_pr": null,
       "rebased_onto": null,
       "depends_on": [
@@ -286,11 +286,12 @@
         "llm/llama_server.go",
         "llm/llama_server_test.go",
         "llm/server.go",
-        "server/routes.go"
+        "server/routes.go",
+        "llama/compat/004-reasoning-budget-line-boundary.patch"
       ],
-      "title": "llm: spend the thinking budget across a response, not per block",
+      "title": "llm+llama: spend the thinking budget across a response, not per block",
       "status": "fork-only",
-      "note": "Go half only. The code is already on think-budget, authored there as 677f91ce -- this branch is the extraction that makes it merge-able, so merging it into think-budget is a no-op for these four files (all 77 added lines verified present). The llama.cpp half of 677f91ce is NOT here; see known_conflicts on the 004 patch."
+      "note": "Go half AND llama.cpp half. The feature lived on think-budget and on no up-* branch; this is the extraction. The Go half is a no-op for think-budget (all 77 added lines verified already present). The 004 patch is regenerated against the b10969 pin and applies to a pristine b10969 with no fuzz; it is the UNION of #18212's copy and think-budget's, which closes the drift flagged on #18212's row. VERIFIED BY BUILD: cmake -DGGML_CUDA=OFF, target test-reasoning-budget, 14/14 pass; reverting the two behaviours fails test-reasoning-budget.cpp:367. Go gates cannot see a .patch, so a build is the only check that can."
     }
   ],
   "known_conflicts": [
