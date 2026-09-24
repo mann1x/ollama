@@ -10,10 +10,10 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.2",
-  "updated": "2026-09-24",
+  "updated": "2026-09-25",
   "integration": {
     "branch": "think-budget",
-    "sha": "d57818e3",
+    "sha": "52fa3495",
     "note": "the last think-budget commit that changed code, which is the tree this patch set describes; the manifest commits after it touch only this file",
     "release": {
       "tag": "v0.34.2-1-thinkbudget",
@@ -273,6 +273,20 @@
       "title": "integration: gofmt vision_test_data_test.go",
       "status": "fork-only",
       "note": "One blank line. This is the only file `gofmt -l ./...` names on v0.34.2, so a silent-gofmt gate has to special-case it otherwise. Not going upstream: ruled 2026-09-22, no PR to be filed. fork-only is the settled status, not a placeholder."
+    },
+    {
+      "slug": "up-lfm2-think-off-discard",
+      "branch": "up-lfm2-think-off-discard",
+      "sha": "7faca0df",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/lfm2.go",
+        "model/parsers/lfm2_think_off_test.go"
+      ],
+      "title": "lfm2: keep a reasoning block out of the answer when thinking is off",
+      "status": "fork-only",
+      "note": "Carried from xollama@solidpc (mailbox #255). LFM2.5-8B-A1B reasons regardless of \"think\": false -- its official chat template has no off switch -- so setInitialState routed the whole <think> block verbatim into content. This discards it when thinking is off and the parser supports thinking, the way gemma4.go and laguna.go already do. Independent of every other patch: it touches only lfm2.go, in three hunks that miss up-think-budget's ThinkingTags addition, plus an additive test; base is v0.34.2 and there are no known_conflicts. Six new tests, three fail on the unpatched parser. Whether it goes upstream is the repository owner's call; fork-only until then, not a placeholder."
     },
     {
       "slug": "up-response-scope-think-budget",
