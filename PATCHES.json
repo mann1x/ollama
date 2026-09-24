@@ -10,7 +10,7 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.2",
-  "updated": "2026-09-22",
+  "updated": "2026-09-24",
   "integration": {
     "branch": "think-budget",
     "sha": "d57818e3",
@@ -190,6 +190,19 @@
         "model/parsers/gemma4_test.go"
       ],
       "title": "gemma4: a tool call can open before the thinking channel is closed",
+      "status": "open-upstream"
+    },
+    {
+      "slug": "qwen35-toolcall-in-thinking",
+      "branch": "qwen35-toolcall-in-thinking",
+      "sha": "c58a58b7",
+      "upstream_pr": 18624,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/qwen35.go",
+        "model/parsers/qwen35_boundary_test.go"
+      ],
+      "title": "qwen3.5: a tool call can open before the thinking channel is closed",
       "status": "open-upstream"
     },
     {
