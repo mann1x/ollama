@@ -13,12 +13,12 @@
   "updated": "2026-09-25",
   "integration": {
     "branch": "think-budget",
-    "sha": "90288da3",
-    "note": "the last think-budget commit that changed code, which is the tree this patch set describes; the manifest commits after it touch only this file",
+    "sha": "31b41b5c",
+    "note": "the last think-budget commit that changed the tree this patch set describes (LLAMA_CPP_VERSION, llama/server, llama/compat inputs digest 73387c282b7f, equal to xollama main and dev); the manifest commits after it touch only this file",
     "release": {
-      "tag": "v0.34.2-1-thinkbudget",
-      "sha": "645ec440",
-      "note": "cut before up-gemma4-unparsed-tool-call-content; it carries patches 1-12 only"
+      "tag": "v0.34.2-2-thinkbudget",
+      "sha": "d6e24119",
+      "note": "carries patches 1-21. Its llama/compat/README.md predates 31b41b5c (inputs digest 597db4f78d5b); the README is the only difference, so the published runtime (ollama-linux-amd64-runtime.tgz sha256 33ac42c1107c68604ed9c2e2c991e9a7cdfd00b33c2a4f2c2ce758273df36447) is what 31b41b5c builds. Release notes updated 2026-09-25 to 9fd29ed4's corrected text."
     }
   },
   "verification": {
