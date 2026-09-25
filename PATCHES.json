@@ -13,7 +13,7 @@
   "updated": "2026-09-25",
   "integration": {
     "branch": "think-budget",
-    "sha": "52fa3495",
+    "sha": "90288da3",
     "note": "the last think-budget commit that changed code, which is the tree this patch set describes; the manifest commits after it touch only this file",
     "release": {
       "tag": "v0.34.2-1-thinkbudget",
@@ -289,6 +289,20 @@
       "note": "Carried from xollama@solidpc (mailbox #255). LFM2.5-8B-A1B reasons regardless of \"think\": false -- its official chat template has no off switch -- so setInitialState routed the whole <think> block verbatim into content. This discards it when thinking is off and the parser supports thinking, the way gemma4.go and laguna.go already do. Independent of every other patch: it touches only lfm2.go, in three hunks that miss up-think-budget's ThinkingTags addition, plus an additive test; base is v0.34.2 and there are no known_conflicts. Six new tests, three fail on the unpatched parser. Whether it goes upstream is the repository owner's call; fork-only until then, not a placeholder."
     },
     {
+      "slug": "up-gemma4-assistant-shape",
+      "branch": "up-gemma4-assistant-shape",
+      "sha": "4bae0944",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "llama/compat/005-gemma4-assistant-unchecked-tensor-shape.patch",
+        "llama/compat/README.md"
+      ],
+      "title": "llama: load a gemma-4 assistant drafter whose shape is left unchecked",
+      "status": "fork-only",
+      "note": "Carried from xollama@solidpc (mailbox #284; authored there as a836824b). A llama.cpp patch, so it retires on a LLAMA_CPP_VERSION bump: check_tensor_dims read gemma4-assistant's empty expected shape {} as 'must be a scalar', and its error path threw vector::_M_range_check from llama_format_tensor_shape(ne), so an E2B/E4B assistant drafter never loaded. The .patch blob (4f103fa6) is byte-identical to xollama's. The applier sorts by file name, so 005 applies after 001, models/003 and 004 regardless of merge order; replayed on a clean b10969 fetch (391fac16) with 001+003+004+005 and llama-server built. Independent of every other patch; its one collision is the README entry, see known_conflicts. Merge position here only follows the fork-only-before-stacked convention."
+    },
+    {
       "slug": "up-response-scope-think-budget",
       "branch": "up-response-scope-think-budget",
       "sha": "3c5d29b4",
@@ -318,7 +332,7 @@
       ],
       "title": "llm+llama: spend the thinking budget across a response, not per block",
       "status": "fork-only",
-      "note": "Go half AND llama.cpp half. The feature lived on think-budget and on no up-* branch; this is the extraction. The Go half is a no-op for think-budget (all 77 added lines verified already present). The 004 patch is regenerated against the b10969 pin and applies to a pristine b10969 with no fuzz; it is the UNION of #18212's copy and think-budget's, which closes the drift flagged on #18212's row. VERIFIED BY BUILD: cmake -DGGML_CUDA=OFF, target test-reasoning-budget, 14/14 pass; reverting the two behaviours fails test-reasoning-budget.cpp:367. Go gates cannot see a .patch, so a build is the only check that can."
+      "note": "Go half AND llama.cpp half. The feature lived on think-budget and on no up-* branch; this is the extraction. The Go half is a no-op for think-budget (all 77 added lines verified already present). The 004 patch is regenerated against the b10969 pin and applies to a pristine b10969 with no fuzz; it is the UNION of #18212's copy and think-budget's, which closes the drift flagged on #18212's row. VERIFIED BY BUILD: cmake -DGGML_CUDA=OFF, target test-reasoning-budget, 14/14 pass; reverting the two behaviours fails test-reasoning-budget.cpp:367. Go gates cannot see a .patch, so a build is the only check that can. INTEGRATED 2026-09-25: think-budget never took this branch's 004 until cherry-pick -x dea66221; until then the integration branch and the v0.34.2-1-thinkbudget runtime carried the pre-drift 945-line copy. think-budget's 004 is now byte-identical to this branch's (blob c5e6c902)."
     }
   ],
   "known_conflicts": [
@@ -348,6 +362,15 @@
       "file": "model/parsers/parsers.go, model/parsers/gemma4.go, model/parsers/qwen35.go",
       "order_independent": true,
       "resolution": "same shape again, three files at once: up-think-budget adds ThinkingTagger and the ThinkingTags methods, up-toolcall-tags adds ToolCallTagger and the ToolCallTags methods, both at the same point. Keep both, ThinkingTagger first. NOTE the boundary cuts inside a function: the closing brace on the line after >>>>>>> belongs to BOTH halves, so close the first block with its own brace rather than concatenating the two sides -- a plain keep-both here produces code that does not parse."
+    },
+    {
+      "between": [
+        "up-reasoning-budget-line-boundary",
+        "up-gemma4-assistant-shape"
+      ],
+      "file": "llama/compat/README.md",
+      "order_independent": true,
+      "resolution": "both add a Files entry after 002's. Keep both, 004's entry first, so the list reads in apply order. Replayed from v0.34.2 as --no-ff merges: the result is blob d612923f, byte-identical to xollama's README at a836824b."
     }
   ]
 }
