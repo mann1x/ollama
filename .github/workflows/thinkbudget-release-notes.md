@@ -2,19 +2,19 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Mostly the runtime.** Two of the four changes are llama.cpp patches, which
-compile into `lib/ollama`, not into the `ollama` binary — so on Linux take
+**Mostly the runtime.** Both llama.cpp changes compile into `lib/ollama`,
+not into the `ollama` binary, so on Linux take
 `ollama-linux-amd64-runtime.tgz` as well, and on Windows
 `ollama-windows-amd64-runtime.zip`. The binary alone does not carry them.
 
-- **A spent response budget now stays quiet.** The runtime of `0.34.2-1`
-  still carried an older copy of the reasoning-budget patch. With a
-  response-scope budget spent, a model that reopened its thinking block got the
-  whole wrap-up message forced into it again, every time — measured through a
-  coding agent at thirty-two identical copies in one turn, ending at the output
-  cap with no answer. A reopened block is now closed with the end tag alone,
-  and the start tag is barred while the allowance is gone; a reset sequence
-  (a tool call) lifts both.
+- **The reasoning-budget patch is now the one xollama builds.** The runtime's
+  copy of `004-reasoning-budget-line-boundary.patch` is replaced by the
+  reconciled copy from `up-response-scope-think-budget`: reset sequences
+  become a list rather than a single sequence, and llama-server gains a
+  `--reasoning-budget-scope` flag (`THINK_BUDGET_SCOPE`). Ollama sets the scope
+  per request, so nothing it sends changes. The spent-response behaviour — a
+  reopened block closed with the end tag alone, reopening barred while the
+  allowance is gone — was already in `0.34.2-1` and is unchanged.
 - **Gemma 4 E2B/E4B assistant drafters load.** `check_tensor_dims` read the
   drafter's deliberately unchecked `masked_embd_*` shapes as "must be a
   scalar", and the error path then threw
