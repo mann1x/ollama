@@ -2,43 +2,37 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**One parser fix, and it is the reason this build exists.**
+**Mostly the runtime.** Two of the four changes are llama.cpp patches, which
+compile into `lib/ollama`, not into the `ollama` binary — so on Linux take
+`ollama-linux-amd64-runtime.tgz` as well, and on Windows
+`ollama-windows-amd64-runtime.zip`. The binary alone does not carry them.
 
-`Gemma4CollectingThinking` scanned for a single tag, `<channel|>`. Content state
-has always scanned for two — the thinking open tag *and* the tool-call open tag
-— and thinking state was the asymmetric one. So a Gemma 4 model that opens a
-tool call before it closes its thinking channel had the entire call collected as
-reasoning. Captured verbatim at the end of a 17,325-character thinking block:
+- **A spent response budget now stays quiet.** The runtime of `0.34.2-1`
+  still carried an older copy of the reasoning-budget patch. With a
+  response-scope budget spent, a model that reopened its thinking block got the
+  whole wrap-up message forced into it again, every time — measured through a
+  coding agent at thirty-two identical copies in one turn, ending at the output
+  cap with no answer. A reopened block is now closed with the end tag alone,
+  and the start tag is barred while the allowance is gone; a reset sequence
+  (a tool call) lifts both.
+- **Gemma 4 E2B/E4B assistant drafters load.** `check_tensor_dims` read the
+  drafter's deliberately unchecked `masked_embd_*` shapes as "must be a
+  scalar", and the error path then threw
+  `vector::_M_range_check: __n (which is 0) >= this->size() (which is 0)`
+  while trying to print the mismatch. 12B, 26B-A4B and 31B were never
+  affected. Acceptance stays below what the drafter was trained for, because
+  its ordered-embedding head is not implemented; output is unaffected, since
+  every drafted token is verified.
+- **Gemma 4: a tool call the parser cannot read no longer vanishes.** It
+  arrives as content, tags included, instead of an empty turn — deliberately
+  not repaired, since the captured case was a degenerating model.
+- **LFM2: `"think": false` keeps the reasoning block out of the answer.**
+  LFM2.5's template has no switch to stop reasoning, so the block is now
+  recognised and discarded rather than returned as the answer.
 
-```
-Let's go.<|tool_call>call:editor{end_line:91,...}<tool_call|><|tool_response>
-```
-
-Complete, well-formed, and invisible. The caller saw a turn with no tool calls,
-ended the run, and the edit was never made — from outside it looks like the
-model stopped mid-task for no reason. The other half of the symptom is the
-special tokens themselves reaching the client as chat text, since nothing
-consumed them.
-
-Thinking state now takes whichever of the two tags comes first, so a close tag
-followed by a call still goes down the ordinary path and nothing about the
-well-formed case changes. The partial-tag check spans both tags, because the
-open tag streams in across chunks and holding back only a partial `<channel|>`
-would emit `<|tool` as reasoning before the rest arrived.
-
-This is proposed upstream to the fork's `main` as
-[mann1x/ollama#7](https://github.com/mann1x/ollama/pull/7). It affects Gemma 4
-only; no other parser and nothing in the thinking-budget work is touched.
-
-**Everything else is identical to the `0.34.2-thinkbudget` build** — same
-feature set, same rebase onto Ollama 0.34.2, same `/api/show` cache keying on
-the think value. The two carried-over notes from that build still apply:
-
-- `TestShowThinkBudget` follows 0.34.2's move from `fs/ggml`'s `KV` to
-  `internal/testutil/gguf`'s. `go build ./...` stays green over it — a test file
-  is not built by it, so `go vet ./server/...` is what says `undefined: ggml`.
-- The repeat guard is kept over upstream's `tokenRepeat > 100` check, which is
-  the same deliberate replacement this series has carried since 0.32.
+**Everything else is identical to the `0.34.2-1-thinkbudget` build**,
+including the Gemma 4 fix for a tool call opened inside the thinking channel
+that led that build.
 
 One upstream test fails on this tag and is **not** something this build causes
 or fixes: `cmd/launch`'s `TestCodexAppCountsOnlyOllamaRequestsInRegularProfile`
