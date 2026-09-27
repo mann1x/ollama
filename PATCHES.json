@@ -16,9 +16,9 @@
     "sha": "a47daff5",
     "note": "the last think-budget commit that changed the tree this patch set describes (LLAMA_CPP_VERSION b11081; llama/server + llama/compat inputs digest 3023ebe12b5e, computed as xollama-runtime.yaml does: git ls-tree -r HEAD -- LLAMA_CPP_VERSION llama/server llama/compat | sha256sum). The manifest commits after it touch only this file. Its tree is the apply-order replay from v0.34.4 (34ddceae) plus this branch's own files only: the release workflow and notes, CLAUDE.md, PATCHES.json, scripts/thinkbudget-install.ps1, .gitattributes and the fork update feed (app/cmd/app/app.go, app/updater/*).",
     "release": {
-      "tag": "v0.34.2-2-thinkbudget",
-      "sha": "d6e24119",
-      "note": "carries patches 1-21. Its llama/compat/README.md predates 31b41b5c (inputs digest 597db4f78d5b); the README is the only difference, so the published runtime (ollama-linux-amd64-runtime.tgz sha256 33ac42c1107c68604ed9c2e2c991e9a7cdfd00b33c2a4f2c2ce758273df36447) is what 31b41b5c builds. Release notes updated 2026-09-25 to 9fd29ed4's corrected text. It is a v0.34.2 release and predates the 2026-09-27 move to v0.34.4; no v0.34.4 release has been cut yet."
+      "tag": "v0.34.4-thinkbudget",
+      "sha": "449049ae",
+      "note": "carries all 23 patches at this manifest's shas on v0.34.4 / llama.cpp b11081; built 2026-09-27 by run 36339158655 (all 9 jobs green). 449049ae is a47daff5 plus manifest and release-notes commits only, so its inputs digest is 3023ebe12b5e (17ab857846eb812a2025356bc06c44bfab3465acc34b9f188897ccc0b2f49290 with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 9769cb4b01f559a701734cfb32ea029286f3deb114b10ceb16b0386af6386f7c; checked after download: sha256sum -c OK, the binary reports 0.34.4-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Previous: v0.34.2-2-thinkbudget (d6e24119)."
     }
   },
   "verification": {
