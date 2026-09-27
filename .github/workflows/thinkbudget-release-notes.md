@@ -2,46 +2,41 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Mostly the runtime.** Both llama.cpp changes compile into `lib/ollama`,
-not into the `ollama` binary, so on Linux take
-`ollama-linux-amd64-runtime.tgz` as well, and on Windows
-`ollama-windows-amd64-runtime.zip`. The binary alone does not carry them.
+**Rebased onto Ollama `v0.34.4`, with llama.cpp `b11081`.** Take the runtime
+archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
+`ollama-windows-amd64-runtime.zip`): the two llama.cpp patches this series
+carries compile into `lib/ollama`, and they are rebuilt here against the new
+llama.cpp pin.
 
-- **The reasoning-budget patch is now the one xollama builds.** The runtime's
-  copy of `004-reasoning-budget-line-boundary.patch` is replaced by the
-  reconciled copy from `up-response-scope-think-budget`: reset sequences
-  become a list rather than a single sequence, and llama-server gains a
-  `--reasoning-budget-scope` flag (`THINK_BUDGET_SCOPE`). Ollama sets the scope
-  per request, so nothing it sends changes. The spent-response behaviour — a
-  reopened block closed with the end tag alone, reopening barred while the
-  allowance is gone — was already in `0.34.2-1` and is unchanged.
-- **Gemma 4 E2B/E4B assistant drafters load.** `check_tensor_dims` read the
-  drafter's deliberately unchecked `masked_embd_*` shapes as "must be a
-  scalar", and the error path then threw
-  `vector::_M_range_check: __n (which is 0) >= this->size() (which is 0)`
-  while trying to print the mismatch. 12B, 26B-A4B and 31B were never
-  affected. Acceptance stays below what the drafter was trained for, because
-  its ordered-embedding head is not implemented; output is unaffected, since
-  every drafted token is verified.
-- **Gemma 4: a tool call the parser cannot read no longer vanishes.** It
-  arrives as content, tags included, instead of an empty turn — deliberately
-  not repaired, since the captured case was a degenerating model.
-- **LFM2: `"think": false` keeps the reasoning block out of the answer.**
-  LFM2.5's template has no switch to stop reasoning, so the block is now
-  recognised and discarded rather than returned as the answer.
+- **Thinking budgets follow 0.34.4's model-defined levels.** Upstream moved
+  thinking levels onto the model (a model states the levels it supports and a
+  default). The budget is ported onto that design: `"think": 1500` is still
+  a token budget, and a level name is still a share of the output allowance.
+  `minimal` is no longer raised to `low`, and `xhigh` means `max`. `--think`
+  passes a level name it does not know to the server instead of refusing it.
+  An integer ≤ 0 or a fraction is still refused.
+- **Fixed: a budget was dropped on every model that states its levels.**
+  0.34.4 resolves the requested level before the budget was read, so on
+  qwen3.x, gemma4 and every other model with stated controls, a budget was
+  replaced by the default level's share: `"think": 1500` reached the runner as
+  1024 on a 4096 window. The budget is now read from the request.
+- **Gemma 4: a tool call whose string value swallowed the next argument's
+  name is rejected**, not executed. The shape is a string ending in
+  `,<name>:` where `<name>` is not a key of the same object. It is rejected,
+  never repaired, because repairing a cut value writes the fragment.
 
-**Everything else is identical to the `0.34.2-1-thinkbudget` build**,
-including the Gemma 4 fix for a tool call opened inside the thinking channel
-that led that build.
+**Everything else is carried unchanged from `0.34.2-2-thinkbudget`**: the
+response-scoped reasoning budget, the line-boundary close, Gemma 4 E2B/E4B
+assistant drafters, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder parser
+fixes. The full list, with every patch's branch and commit, is `PATCHES.json`
+on the `think-budget` branch.
 
-One upstream test fails on this tag and is **not** something this build causes
-or fixes: `cmd/launch`'s `TestCodexAppCountsOnlyOllamaRequestsInRegularProfile`
-(`regular profile Ollama request count = 0, want 2`). It fails identically on
-the pristine `v0.34.2` tag.
+`go test ./...` passes in full on this tree. The `cmd/launch` test that failed
+on the stock tag under a tmpfs temp dir is fixed here (`up-codex-request-count-mtime`).
 
-## What changed about updating — and what was still wrong
+## Updating (unchanged since 0.34.2)
 
-The previous build shipped the desktop app with three changes, on the
+The 0.34.2 builds shipped the desktop app with three changes, on the
 understanding that the app was what replaced these builds with stock ones. The
 app *is* one of the things that does it, and those three changes stand:
 
@@ -71,7 +66,7 @@ loaded. The upgraded machine went on answering `0.34.0-thinkbudget` for another
 fourteen hours and only failed when it was restarted — at which point stock
 0.34.2 did not start at all (`Failed to start: Unable to init instance`).
 
-So this build adds **`scripts/thinkbudget-install.ps1`**, which claims an
+So these builds carry **`scripts/thinkbudget-install.ps1`**, which claims an
 Add/Remove Programs identity of its own — its own AppId GUID,
 `Ollama think-budget`, publisher `mann1x` — so there is nothing left for the
 Store to match. It backs up the stock key first, refuses to swap binaries under
