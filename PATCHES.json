@@ -188,14 +188,15 @@
       "slug": "gemma4-toolcall-in-thinking",
       "branch": "gemma4-toolcall-in-thinking",
       "sha": "467a01ee",
-      "upstream_pr": 18307,
+      "upstream_pr": null,
       "rebased_onto": "v0.34.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go"
       ],
       "title": "gemma4: a tool call can open before the thinking channel is closed",
-      "status": "open-upstream"
+      "status": "fork-only",
+      "note": "CLOSED UPSTREAM 2026-09-25 as ollama/ollama#18307 and kept closed by the repository owner's decision (2026-09-27): carried here as fork-only, no upstream PR planned; to be revisited only if upstream merges something in this area. The change exists only on this branch (and think-budget by cherry-pick); no other up-* branch carries it. The branch keeps its un-prefixed name to spare consumers a ref change; renaming is now safe since no open PR depends on it."
     },
     {
       "slug": "qwen35-toolcall-in-thinking",
