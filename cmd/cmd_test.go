@@ -27,6 +27,54 @@ import (
 	"github.com/ollama/ollama/types/model"
 )
 
+func TestRunThinkingNamesReachServer(t *testing.T) {
+	for _, value := range []string{"xhigh", "minimal", "future", "true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			var got *api.ThinkValue
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/show":
+					json.NewEncoder(w).Encode(api.ShowResponse{Capabilities: []model.Capability{model.CapabilityCompletion, model.CapabilityThinking}})
+				case "/api/generate":
+					var req api.GenerateRequest
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Error(err)
+					}
+					got = req.Think
+					json.NewEncoder(w).Encode(api.GenerateResponse{Done: true})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("OLLAMA_HOST", server.URL)
+			cmd := &cobra.Command{}
+			cmd.SetContext(t.Context())
+			for _, name := range []string{"format", "think", "keepalive"} {
+				cmd.Flags().String(name, "", "")
+			}
+			for _, name := range []string{"verbose", "insecure", "nowordwrap", "hidethinking"} {
+				cmd.Flags().Bool(name, false, "")
+			}
+			if err := cmd.Flags().Set("think", value); err != nil {
+				t.Fatal(err)
+			}
+			if err := RunHandler(cmd, []string{"thinking-test", "hi"}); err != nil {
+				t.Fatal(err)
+			}
+			var want any = value
+			if value == "true" {
+				want = true
+			} else if value == "false" {
+				want = false
+			}
+			if got == nil || got.Value != want {
+				t.Fatalf("think=%v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestShowInfo(t *testing.T) {
 	t.Run("bare details", func(t *testing.T) {
 		var b bytes.Buffer
@@ -2824,44 +2872,6 @@ func TestIsLocalhost(t *testing.T) {
 	}
 }
 
-func TestParseThinkFlag(t *testing.T) {
-	tests := []struct {
-		value   string
-		want    any
-		wantErr bool
-	}{
-		{value: "", want: true},
-		{value: "true", want: true},
-		{value: "false", want: false},
-		{value: "minimal", want: "minimal"},
-		{value: "low", want: "low"},
-		{value: "max", want: "max"},
-		{value: "8192", want: 8192},
-		{value: "0", wantErr: true},
-		{value: "-1", wantErr: true},
-		{value: "none", wantErr: true},
-		{value: "8192.5", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.value, func(t *testing.T) {
-			think, err := parseThinkFlag(tt.value)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("parseThinkFlag(%q) = %v, want an error", tt.value, think.Value)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseThinkFlag(%q): %v", tt.value, err)
-			}
-			if think.Value != tt.want {
-				t.Errorf("parseThinkFlag(%q) = %v, want %v", tt.value, think.Value, tt.want)
-			}
-		})
-	}
-}
-
 func TestRunCommandHasNoAgentFlags(t *testing.T) {
 	root := NewCLI()
 	run, _, err := root.Find([]string{"run"})
@@ -2898,6 +2908,45 @@ func TestFormerAgentEntryPointsAreRejected(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "unknown") {
 				t.Fatalf("former agent entry point %q returned %v, want unknown command or flag", args, err)
+			}
+		})
+	}
+}
+
+func TestParseThinkFlag(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    any
+		wantErr bool
+	}{
+		{value: "", want: true},
+		{value: "true", want: true},
+		{value: "false", want: false},
+		{value: "minimal", want: "minimal"},
+		{value: "low", want: "low"},
+		{value: "max", want: "max"},
+		{value: "8192", want: 8192},
+		{value: "0", wantErr: true},
+		{value: "-1", wantErr: true},
+		{value: "xhigh", want: "xhigh"},
+		{value: "none", want: "none"},
+		{value: "8192.5", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			think, err := parseThinkFlag(tt.value)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseThinkFlag(%q) = %v, want an error", tt.value, think.Value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseThinkFlag(%q): %v", tt.value, err)
+			}
+			if think.Value != tt.want {
+				t.Errorf("parseThinkFlag(%q) = %v, want %v", tt.value, think.Value, tt.want)
 			}
 		})
 	}
