@@ -43,6 +43,10 @@ func (p *Qwen3CoderParser) HasThinkingSupport() bool {
 	return false
 }
 
+func (p *Qwen3CoderParser) ThinkingClose() []string {
+	return nil
+}
+
 func (p *Qwen3CoderParser) PreservedTokens() []string {
 	return []string{
 		toolOpenTag,
@@ -60,6 +64,18 @@ func (p *Qwen3CoderParser) Add(s string, done bool) (content string, thinking st
 	p.acc.WriteString(s)
 
 	events := p.parseEvents()
+	if done {
+		switch p.state {
+		case qwenParserState_LookingForToolStart:
+			if p.acc.Len() > 0 {
+				events = append(events, qwenEventContent{content: p.acc.String()})
+			}
+		case qwenParserState_CollectingToolContent:
+			events = append(events, qwenEventContent{content: toolOpenTag + p.acc.String()})
+		}
+		p.acc.Reset()
+		p.state = qwenParserState_LookingForToolStart
+	}
 
 	var toolCalls []api.ToolCall
 	var sb strings.Builder
@@ -244,29 +260,6 @@ func parseToolCall(raw qwenEventRawToolCall, tools []api.Tool) (api.ToolCall, er
 
 	var functionCall XMLFunctionCall
 	err := xml.Unmarshal([]byte(xmlString), &functionCall)
-	if err != nil {
-		// A call the model began, abandoned part-way through a parameter, and
-		// then started over. The abandoned attempt sits inside the value of a
-		// parameter that was never closed, so the block carries two `<function>`
-		// roots and does not unmarshal. Everything before the last `<tool_call>`
-		// is a draft the model discarded itself; what follows it is the call it
-		// meant to send.
-		//
-		// Only reached once the block as sent has already failed, and that is
-		// what makes it safe: a parameter whose value legitimately contains
-		// `<tool_call>` and which the model closed properly parses on the first
-		// attempt and never arrives here.
-		if restarted, ok := afterLastRestart(raw.raw); ok {
-			// Repairing as well as parsing, because the two defects arrive
-			// together: the turn that restarts a call under long context is the
-			// same turn that stops closing its tags.
-			if lastAttempt, restartErr := unmarshalFunctionCall(transformToXML(restarted)); restartErr == nil {
-				slog.Warn("qwen tool call was restarted; parsed the attempt the model finished", "error", err)
-				functionCall = lastAttempt
-				err = nil
-			}
-		}
-	}
 	if err != nil {
 		repaired, ok := repairToolCallXML(xmlString)
 		if !ok {
@@ -455,46 +448,6 @@ var (
 	qwenFunctionOpenRegex  = regexp.MustCompile(`<function\b[^>]*>`)
 	qwenParameterOpenRegex = regexp.MustCompile(`<parameter\b[^>]*>`)
 )
-
-// unmarshalFunctionCall parses a transformed block, closing tags the model left
-// open if it has to. The repair is the same one the whole block gets; this
-// applies it to a part of it.
-func unmarshalFunctionCall(xmlString string) (XMLFunctionCall, error) {
-	var functionCall XMLFunctionCall
-	err := xml.Unmarshal([]byte(xmlString), &functionCall)
-	if err == nil {
-		return functionCall, nil
-	}
-	repaired, ok := repairToolCallXML(xmlString)
-	if !ok {
-		return XMLFunctionCall{}, err
-	}
-	if repairErr := xml.Unmarshal([]byte(repaired), &functionCall); repairErr != nil {
-		// The first error describes the defect; what the repair made of it does
-		// not.
-		return XMLFunctionCall{}, err
-	}
-	return functionCall, nil
-}
-
-// afterLastRestart returns what follows the final `<tool_call>` opening inside
-// a tool call block, when the model opened another one part-way through.
-//
-// Measured on a single agent session (2026-09-05, mann1x/cline#64): eight
-// turns, and in every one the number of `<tool_call>` openings inside the block
-// matched the number of `<parameter=` tags the model never closed -- one
-// restart per abandoned parameter. Each of the eight ended in a complete,
-// balanced call, so the tail is the whole of what the model meant to say.
-//
-// Deliberately not a heuristic about which attempt is best: the model's own
-// last word is, and the earlier ones are drafts it walked away from.
-func afterLastRestart(raw string) (string, bool) {
-	idx := strings.LastIndex(raw, toolOpenTag)
-	if idx < 0 {
-		return "", false
-	}
-	return raw[idx+len(toolOpenTag):], true
-}
 
 // repairToolCallXML closes tags the model left open, so that a dropped closing
 // tag costs a warning rather than the whole request.

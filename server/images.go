@@ -61,22 +61,22 @@ type registryOptions struct {
 }
 
 type Model struct {
-	Name               string `json:"name"`
-	Config             model.ConfigV2
-	ShortName          string
-	ModelPath          string
-	ModelShardPaths    []string
-	DraftPath          string
-	DraftShardPaths    []string
-	ParentModel        string
-	HasChatTemplate    bool
-	HasGoTemplate      bool
+	Name            string `json:"name"`
+	Config          model.ConfigV2
+	ShortName       string
+	ModelPath       string
+	ModelShardPaths []string
+	DraftPath       string
+	DraftShardPaths []string
+	ParentModel     string
+	HasChatTemplate bool
+	HasGoTemplate   bool
 	// ThinkOpenTag and ThinkCloseTag are the reasoning tags the GGUF chat
 	// template renders between, for a model that has no renderer, no parser and
 	// no Go template. They are the last place a thinking budget can learn where
 	// to cut, and separating reasoning from content needs them just as much.
-	ThinkOpenTag  string
-	ThinkCloseTag string
+	ThinkOpenTag       string
+	ThinkCloseTag      string
 	PreferChatTemplate bool // set when GGUF chat_template should take precedence over Go TEMPLATE
 	AdapterPaths       []string
 	ProjectorPaths     []string
@@ -87,7 +87,8 @@ type Model struct {
 	GenerationDefaults model.GenerationDefaults
 	Messages           []api.Message
 
-	Template *template.Template
+	Template       *template.Template
+	templateDigest string
 
 	// Metadata of the model blob and of each projector, read from their
 	// metadata files when the model is loaded.
@@ -464,26 +465,15 @@ func (m *Model) filterUnsupportedCapabilities(capabilities []model.Capability, m
 			return c == model.CapabilityAudio
 		})
 	}
-	if suppressVisionCapability(m) {
-		capabilities = slices.DeleteFunc(capabilities, func(c model.Capability) bool {
-			return c == model.CapabilityVision
-		})
-	}
 
 	return capabilities
-}
-
-func suppressVisionCapability(m *Model) bool {
-	// The current MLX Nemotron path is text-only. Do not advertise vision for
-	// safetensors manifests until the runner can load and serve that modality.
-	return isNemotron3NanoSafetensors(m)
 }
 
 func suppressAudioCapability(m *Model, arch string) bool {
 	if m.Config.ModelFormat == "safetensors" && m.Config.Renderer == "glimmer" {
 		return true
 	}
-	if isNemotron3NanoSafetensors(m) {
+	if isNemotronSafetensors(m) {
 		return true
 	}
 
@@ -497,14 +487,16 @@ func suppressAudioCapability(m *Model, arch string) bool {
 	return false
 }
 
-func isNemotron3NanoSafetensors(m *Model) bool {
-	return isNemotron3NanoSafetensorsConfig(m.Config)
+func isNemotronSafetensors(m *Model) bool {
+	return isNemotronSafetensorsConfig(m.Config)
 }
 
-func isNemotron3NanoSafetensorsConfig(cfg model.ConfigV2) bool {
+func isNemotronSafetensorsConfig(cfg model.ConfigV2) bool {
 	return cfg.ModelFormat == "safetensors" &&
 		(cfg.Parser == "nemotron-3-nano" ||
 			cfg.Renderer == "nemotron-3-nano" ||
+			cfg.Parser == "nemotron-3.5-nano" ||
+			cfg.Renderer == "nemotron-3.5-nano" ||
 			cfg.ModelFamily == "nemotron_h_omni" ||
 			slices.Contains(cfg.ModelFamilies, "nemotron_h_omni"))
 }
@@ -756,6 +748,7 @@ func GetModel(name string) (*Model, error) {
 		case "application/vnd.ollama.image.prompt",
 			"application/vnd.ollama.image.template":
 			m.HasGoTemplate = true
+			m.templateDigest = layer.Digest
 			bts, err := os.ReadFile(filename)
 			if err != nil {
 				return nil, err
@@ -1393,6 +1386,18 @@ var testMakeRequestDialContext func(ctx context.Context, network, addr string) (
 
 var errBlockedRedirect = errors.New("blocked redirect to a different host")
 
+// isAllowedHost reports whether host may receive cross-host redirects.
+var allowedRedirectHosts = []string{"ollama.com", "ollama.ai", "hf.co", "huggingface.co"}
+
+func isAllowedHost(host string) bool {
+	for _, h := range allowedRedirectHosts {
+		if host == h || strings.HasSuffix(host, "."+h) {
+			return true
+		}
+	}
+	return false
+}
+
 func makeRequest(ctx context.Context, method string, requestURL *url.URL, headers http.Header, body io.Reader, regOpts *registryOptions) (*http.Response, error) {
 	if requestURL.Scheme != "http" && regOpts != nil && regOpts.Insecure {
 		requestURL.Scheme = "http"
@@ -1433,16 +1438,20 @@ func makeRequest(ctx context.Context, method string, requestURL *url.URL, header
 	if checkRedirect == nil {
 		insecure := regOpts != nil && regOpts.Insecure
 		// Default redirect policy: same-host only, so a registry can't steer
-		// manifest or blob requests at internal addresses. --insecure opts out
-		// for trusted LAN/local registries.
+		// manifest or blob requests at internal addresses. CDN-backed
+		// registries redirect among their own hosts, allowed via
+		// isAllowedHost. --insecure opts out for trusted LAN/local registries.
 		checkRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) > 10 {
 				return errMaxRedirectsExceeded
 			}
-			if !insecure && req.URL.Host != via[0].URL.Host {
-				return errBlockedRedirect
+			if insecure || req.URL.Host == via[0].URL.Host {
+				return nil
 			}
-			return nil
+			if isAllowedHost(via[0].URL.Hostname()) && isAllowedHost(req.URL.Hostname()) {
+				return nil
+			}
+			return errBlockedRedirect
 		}
 	}
 

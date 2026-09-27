@@ -43,6 +43,7 @@ type Gemma4Parser struct {
 	callIndex             int
 	hasThinkingSupport    bool
 	thinkingEnabled       bool // true when both model supports and user requested thinking
+	contentPrefill        bool // true when the prompt continues assistant content
 	needsChannelNameStrip bool // true when we just entered thinking and need to strip "thought\n"
 	// True immediately after a thinking block closed. A block closed by the
 	// reasoning-budget sampler is closed between the model's <|channel> token
@@ -57,6 +58,13 @@ func (p *Gemma4Parser) HasToolSupport() bool {
 
 func (p *Gemma4Parser) HasThinkingSupport() bool {
 	return p.hasThinkingSupport
+}
+
+func (p *Gemma4Parser) ThinkingClose() []string {
+	if p.thinkingEnabled && !p.contentPrefill {
+		return []string{gemma4ThinkingCloseTag}
+	}
+	return nil
 }
 
 // ThinkingTags reports the delimiters of this parser's thinking block so a
@@ -107,7 +115,7 @@ func (p *Gemma4Parser) Init(tools []api.Tool, lastMessage *api.Message, thinkVal
 	p.tools = tools
 	p.callIndex = 0
 
-	prefill := lastMessage != nil && lastMessage.Role == "assistant"
+	p.contentPrefill = lastMessage != nil && lastMessage.Role == "assistant" && lastMessage.Content != ""
 
 	p.thinkingEnabled = p.HasThinkingSupport() && (thinkValue != nil && thinkValue.Bool())
 
@@ -122,7 +130,7 @@ func (p *Gemma4Parser) Init(tools []api.Tool, lastMessage *api.Message, thinkVal
 		return tools
 	}
 
-	if prefill && lastMessage.Content != "" {
+	if p.contentPrefill {
 		p.state = Gemma4CollectingContent
 		return tools
 	}
@@ -229,37 +237,17 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 		// word "thought" sitting after the budget message. Measured live on
 		// gemma4 with a 16,000-token budget.
 		if p.strayChannelName {
-			// The header and the closing tag are both orphans of the same event
-			// and arrive in either order, so they are stripped in a loop rather
-			// than once each. A turn cut at the *output cap* rather than at the
-			// budget leaves the tag behind as well: the sampler had already
-			// forced its message and closed the block, and the model's own
-			// <channel|> lands afterwards, in content, where it reads as the
-			// literal tag in the middle of an answer. Measured live twice on
-			// 2026-08-09 against a runtime that already dropped the bare header.
-			for {
-				trimmed := strings.TrimLeftFunc(bufStr, unicode.IsSpace)
-				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingCloseTag); ok {
-					bufStr = stripped
-					continue
-				}
-				if stripped, ok := strings.CutPrefix(trimmed, gemma4ThinkingChannelName); ok {
-					bufStr = stripped
-					continue
-				}
-				// Split across chunks: a prefix of either orphan now, the rest
-				// next. Waiting is only safe while more is coming.
-				if !done && trimmed != "" &&
-					(strings.HasPrefix(gemma4ThinkingCloseTag, trimmed) ||
-						strings.HasPrefix(gemma4ThinkingChannelName, trimmed)) {
-					return events, false
-				}
-				bufStr = trimmed
-				break
+			if stripped, ok := strings.CutPrefix(bufStr, gemma4ThinkingChannelName); ok {
+				bufStr = strings.TrimLeftFunc(stripped, unicode.IsSpace)
+				p.buffer.Reset()
+				p.buffer.WriteString(bufStr)
+				p.strayChannelName = false
+			} else if !done && strings.HasPrefix(gemma4ThinkingChannelName, bufStr) {
+				// Split across chunks: "thou" now, the rest next.
+				return events, false
+			} else {
+				p.strayChannelName = false
 			}
-			p.buffer.Reset()
-			p.buffer.WriteString(bufStr)
-			p.strayChannelName = false
 		}
 
 		// Check for thinking open tag
@@ -271,6 +259,26 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			p.buffer.WriteString(remaining)
 			p.state = Gemma4CollectingThinking
 			p.needsChannelNameStrip = true
+
+			if contentBefore = strings.TrimRightFunc(contentBefore, unicode.IsSpace); len(contentBefore) > 0 {
+				events = append(events, gemma4EventContent{content: contentBefore})
+			}
+			return events, true
+		}
+
+		// A thinking close tag with no matching open tag is a control token that
+		// escaped its block: the model emitted one spuriously, or it closed a
+		// block the prompt primed but this parser was not initialized to track.
+		// It is in PreservedTokens, so it is never legitimate assistant text --
+		// emitting it verbatim leaks the tag, and the reasoning that preceded
+		// it, into content. Drop it and keep collecting content, the same way
+		// Gemma4IgnoringPostToolCallNoise drops a stray <tool_call|>.
+		if idx := strings.Index(bufStr, gemma4ThinkingCloseTag); idx != -1 {
+			contentBefore := bufStr[:idx]
+			remaining := bufStr[idx+len(gemma4ThinkingCloseTag):]
+
+			p.buffer.Reset()
+			p.buffer.WriteString(remaining)
 
 			if contentBefore = strings.TrimRightFunc(contentBefore, unicode.IsSpace); len(contentBefore) > 0 {
 				events = append(events, gemma4EventContent{content: contentBefore})
@@ -295,7 +303,7 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 		// Check for partial tag overlap
 		if !done {
-			if overlapLen := longestOverlap(bufStr, gemma4ThinkingOpenTag, gemma4ToolCallOpenTag); overlapLen > 0 {
+			if overlapLen := longestOverlap(bufStr, gemma4ThinkingOpenTag, gemma4ToolCallOpenTag, gemma4ThinkingCloseTag); overlapLen > 0 {
 				beforePartialTag := bufStr[:len(bufStr)-overlapLen]
 				trailingLen := trailingWhitespaceLen(beforePartialTag)
 				ambiguousStart := len(beforePartialTag) - trailingLen
