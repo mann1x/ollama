@@ -10,10 +10,10 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.2",
-  "updated": "2026-09-25",
+  "updated": "2026-09-27",
   "integration": {
     "branch": "think-budget",
-    "sha": "31b41b5c",
+    "sha": "87a2f4c5",
     "note": "the last think-budget commit that changed the tree this patch set describes (LLAMA_CPP_VERSION, llama/server, llama/compat inputs digest 73387c282b7f, equal to xollama main and dev); the manifest commits after it touch only this file",
     "release": {
       "tag": "v0.34.2-2-thinkbudget",
@@ -301,6 +301,20 @@
       "title": "llama: load a gemma-4 assistant drafter whose shape is left unchecked",
       "status": "fork-only",
       "note": "Carried from xollama@solidpc (mailbox #284; authored there as a836824b). A llama.cpp patch, so it retires on a LLAMA_CPP_VERSION bump: check_tensor_dims read gemma4-assistant's empty expected shape {} as 'must be a scalar', and its error path threw vector::_M_range_check from llama_format_tensor_shape(ne), so an E2B/E4B assistant drafter never loaded. The .patch blob (4f103fa6) is byte-identical to xollama's. The applier sorts by file name, so 005 applies after 001, models/003 and 004 regardless of merge order; replayed on a clean b10969 fetch (391fac16) with 001+003+004+005 and llama-server built. Independent of every other patch; its one collision is the README entry, see known_conflicts. Merge position here only follows the fork-only-before-stacked convention."
+    },
+    {
+      "slug": "up-gemma4-swallowed-key",
+      "branch": "up-gemma4-swallowed-key",
+      "sha": "cbb4086d",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.2",
+      "files": [
+        "model/parsers/gemma4.go",
+        "model/parsers/gemma4_swallowed_key_test.go"
+      ],
+      "title": "gemma4: reject a tool call whose string value swallowed the next argument's name",
+      "status": "fork-only",
+      "note": "Same rule as opencoti's engine-side bug-3541 check (structural, no schema): a string value ending in \",<name>:\" whose <name> is not a key of the same object. Rejected, never repaired. Merges cleanly onto think-budget with every other patch (cherry-pick 87a2f4c5); go test/vet ./model/parsers and go build ./... clean on both."
     },
     {
       "slug": "up-response-scope-think-budget",
