@@ -10,15 +10,15 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.34.4",
-  "updated": "2026-09-27",
+  "updated": "2026-09-29",
   "integration": {
     "branch": "think-budget",
-    "sha": "a47daff5",
+    "sha": "64f1ae1c",
     "note": "the last think-budget commit that changed the tree this patch set describes (LLAMA_CPP_VERSION b11081; llama/server + llama/compat inputs digest 3023ebe12b5e, computed as xollama-runtime.yaml does: git ls-tree -r HEAD -- LLAMA_CPP_VERSION llama/server llama/compat | sha256sum). The manifest commits after it touch only this file. Its tree is the apply-order replay from v0.34.4 (34ddceae) plus this branch's own files only: the release workflow and notes, CLAUDE.md, PATCHES.json, scripts/thinkbudget-install.ps1, .gitattributes and the fork update feed (app/cmd/app/app.go, app/updater/*).",
     "release": {
       "tag": "v0.34.4-thinkbudget",
       "sha": "449049ae",
-      "note": "carries all 23 patches at this manifest's shas on v0.34.4 / llama.cpp b11081; built 2026-09-27 by run 36339158655 (all 9 jobs green). 449049ae is a47daff5 plus manifest and release-notes commits only, so its inputs digest is 3023ebe12b5e (17ab857846eb812a2025356bc06c44bfab3465acc34b9f188897ccc0b2f49290 with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 9769cb4b01f559a701734cfb32ea029286f3deb114b10ceb16b0386af6386f7c; checked after download: sha256sum -c OK, the binary reports 0.34.4-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Previous: v0.34.2-2-thinkbudget (d6e24119)."
+      "note": "carries all 23 patches at this manifest's shas on v0.34.4 / llama.cpp b11081; built 2026-09-27 by run 36339158655 (all 9 jobs green). 449049ae is a47daff5 plus manifest and release-notes commits only, so its inputs digest is 3023ebe12b5e (17ab857846eb812a2025356bc06c44bfab3465acc34b9f188897ccc0b2f49290 with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 9769cb4b01f559a701734cfb32ea029286f3deb114b10ceb16b0386af6386f7c; checked after download: sha256sum -c OK, the binary reports 0.34.4-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Previous: v0.34.2-2-thinkbudget (d6e24119). NOTE 2026-09-29: up-modelfile-roundtrip (24th patch) landed after this release and is not in it."
     }
   },
   "verification": {
@@ -380,6 +380,23 @@
       "title": "llm+llama: spend the thinking budget across a response, not per block",
       "status": "fork-only",
       "note": "Go half AND llama.cpp half. The feature lived on think-budget and on no up-* branch; this is the extraction. The Go half is a no-op for think-budget (all 77 added lines verified already present). The 004 patch is regenerated against the b10969 pin and applies to a pristine b10969 with no fuzz; it is the UNION of #18212's copy and think-budget's, which closes the drift flagged on #18212's row. VERIFIED BY BUILD: cmake -DGGML_CUDA=OFF, target test-reasoning-budget, 14/14 pass; reverting the two behaviours fails test-reasoning-budget.cpp:367. Go gates cannot see a .patch, so a build is the only check that can. INTEGRATED 2026-09-25: think-budget took this branch's 004 by cherry-pick -x dea66221, and its 004 is now byte-identical to this branch's (blob c5e6c902). Before that it carried its own 945-line copy, which already had b4c58eee's quiet close and reopen bar; what it lacked was #18212's data model (reset_seqs, a list, where it had reset_tokens) and the --reasoning-budget-scope flag. dea66221's message says the old copy lacked the quiet close: that is wrong, corrected here. REBUILT 2026-09-27 on up-think-budget@b463e532 (was 15ebdeca on base 4b2ddab9): the new base differs from the old only by b463e532's two test-file lint fixes, and the branch's two commits are unchanged in content."
+    },
+    {
+      "slug": "up-modelfile-roundtrip",
+      "branch": "up-modelfile-roundtrip",
+      "sha": "c8e22c11",
+      "upstream_pr": null,
+      "rebased_onto": "v0.34.4",
+      "depends_on": [],
+      "files": [
+        "parser/parser.go",
+        "parser/swallowed_directive_test.go",
+        "server/images.go",
+        "server/images_test.go"
+      ],
+      "title": "modelfile: show writes only a carried TEMPLATE; create refuses a quote that swallows directives",
+      "status": "fork-only",
+      "note": "Two faults in the show->create round trip. (1) Model.String wrote TEMPLATE {{ .Prompt }} for a model with no template layer (template.DefaultTemplate in memory); a create from it stored a Go template the model never had. Now written only when HasGoTemplate. (2) An unterminated quote on TEMPLATE/SYSTEM swallowed every RENDERER/PARSER/PARAMETER line to the next quote into the value; ParseFile now refuses such a value and names the line. Independent of every other patch; on v0.34.4 directly, listed last only because it is newest. On think-budget it cherry-picks clean (64f1ae1c); think_budget_message verified to round-trip create->show->parse on that tree."
     }
   ],
   "known_conflicts": [
