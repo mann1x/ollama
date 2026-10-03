@@ -3,6 +3,7 @@ package parsers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -28,6 +29,9 @@ const (
 	gemma4ToolCallCloseTag = "<tool_call|>"
 	gemma4ToolResponseTag  = "<|tool_response>"
 	gemma4StringDelimiter  = `<|"|>`
+	// The channel this parser treats as thinking, as the model names it after
+	// the opening tag.
+	gemma4ThinkingChannelName = "thought"
 )
 
 var gemma4QuotedStringRe = regexp.MustCompile(`(?s)<\|"\|>(.*?)<\|"\|>`)
@@ -41,6 +45,11 @@ type Gemma4Parser struct {
 	thinkingEnabled       bool // true when both model supports and user requested thinking
 	contentPrefill        bool // true when the prompt continues assistant content
 	needsChannelNameStrip bool // true when we just entered thinking and need to strip "thought\n"
+	// True immediately after a thinking block closed. A block closed by the
+	// reasoning-budget sampler is closed between the model's <|channel> token
+	// and the "thought\n" header it was about to write, so that header arrives
+	// with the block already over and would otherwise be emitted as the answer.
+	strayChannelName bool
 }
 
 func (p *Gemma4Parser) HasToolSupport() bool {
@@ -58,6 +67,21 @@ func (p *Gemma4Parser) ThinkingClose() []string {
 	return nil
 }
 
+// ThinkingTags reports the delimiters of this parser's thinking block so a
+// thinking-token budget can force the block closed. The opening tag is the
+// bare <|channel> special token rather than the "<|channel>thought" header
+// llama.cpp matches on: both open the block, but a single special token cannot
+// be split differently by the tokenizer, so the budget always engages.
+func (p *Gemma4Parser) ThinkingTags() (string, string) {
+	return gemma4ThinkingOpenTag, gemma4ThinkingCloseTag
+}
+
+// ToolCallTags reports the delimiters of this parser's tool calls, so a
+// response-wide thinking budget can forgive what was spent getting to one.
+func (p *Gemma4Parser) ToolCallTags() (string, string) {
+	return gemma4ToolCallOpenTag, gemma4ToolCallCloseTag
+}
+
 func (p *Gemma4Parser) PreservedTokens() []string {
 	return []string{
 		gemma4ThinkingOpenTag,
@@ -67,6 +91,24 @@ func (p *Gemma4Parser) PreservedTokens() []string {
 		gemma4ToolResponseTag,
 		gemma4StringDelimiter,
 	}
+}
+
+// gemma4UnreadableToolCall is what a tool call becomes when it cannot be read.
+//
+// Not repaired, on purpose. A malformed call is usually a degenerate one -- the
+// run this was taken from has a sibling whose `new_text` is `text=text=text=`
+// repeated -- and a repair that makes such a call well-formed hands the
+// degenerate fragment to the tool, which for an edit means writing it into the
+// user's file. A call the parser cannot read is a call that must not run.
+//
+// But it must not vanish either, which is what used to happen: the warning went
+// to the server log and the client received a turn with no tool call and no
+// content, so nothing downstream could tell a malformed call from a silent
+// model. Returning the raw text keeps the turn intact, lets a client that scans
+// for an unparsed tool call recognise one, and shows the model its own output
+// so the retry has something to correct.
+func gemma4UnreadableToolCall(s string) string {
+	return gemma4ToolCallOpenTag + s + gemma4ToolCallCloseTag
 }
 
 func (p *Gemma4Parser) Init(tools []api.Tool, lastMessage *api.Message, thinkValue *api.ThinkValue) []api.Tool {
@@ -185,6 +227,29 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 	switch p.state {
 	case Gemma4CollectingContent:
+		// A channel header orphaned by the block closing under it.
+		//
+		// The reasoning-budget sampler forces its message and the closing tag
+		// the moment the budget is gone, and the moment it can see the budget
+		// is gone is the model's <|channel> token -- before the "thought\n"
+		// header that follows it has been written. The model writes it anyway,
+		// into a block that is already closed, and it reads on screen as the
+		// word "thought" sitting after the budget message. Measured live on
+		// gemma4 with a 16,000-token budget.
+		if p.strayChannelName {
+			if stripped, ok := strings.CutPrefix(bufStr, gemma4ThinkingChannelName); ok {
+				bufStr = strings.TrimLeftFunc(stripped, unicode.IsSpace)
+				p.buffer.Reset()
+				p.buffer.WriteString(bufStr)
+				p.strayChannelName = false
+			} else if !done && strings.HasPrefix(gemma4ThinkingChannelName, bufStr) {
+				// Split across chunks: "thou" now, the rest next.
+				return events, false
+			} else {
+				p.strayChannelName = false
+			}
+		}
+
 		// Check for thinking open tag
 		if idx := strings.Index(bufStr, gemma4ThinkingOpenTag); idx != -1 {
 			contentBefore := bufStr[:idx]
@@ -194,6 +259,26 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			p.buffer.WriteString(remaining)
 			p.state = Gemma4CollectingThinking
 			p.needsChannelNameStrip = true
+
+			if contentBefore = strings.TrimRightFunc(contentBefore, unicode.IsSpace); len(contentBefore) > 0 {
+				events = append(events, gemma4EventContent{content: contentBefore})
+			}
+			return events, true
+		}
+
+		// A thinking close tag with no matching open tag is a control token that
+		// escaped its block: the model emitted one spuriously, or it closed a
+		// block the prompt primed but this parser was not initialized to track.
+		// It is in PreservedTokens, so it is never legitimate assistant text --
+		// emitting it verbatim leaks the tag, and the reasoning that preceded
+		// it, into content. Drop it and keep collecting content, the same way
+		// Gemma4IgnoringPostToolCallNoise drops a stray <tool_call|>.
+		if idx := strings.Index(bufStr, gemma4ThinkingCloseTag); idx != -1 {
+			contentBefore := bufStr[:idx]
+			remaining := bufStr[idx+len(gemma4ThinkingCloseTag):]
+
+			p.buffer.Reset()
+			p.buffer.WriteString(remaining)
 
 			if contentBefore = strings.TrimRightFunc(contentBefore, unicode.IsSpace); len(contentBefore) > 0 {
 				events = append(events, gemma4EventContent{content: contentBefore})
@@ -218,7 +303,7 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 		// Check for partial tag overlap
 		if !done {
-			if overlapLen := longestOverlap(bufStr, gemma4ThinkingOpenTag, gemma4ToolCallOpenTag); overlapLen > 0 {
+			if overlapLen := longestOverlap(bufStr, gemma4ThinkingOpenTag, gemma4ToolCallOpenTag, gemma4ThinkingCloseTag); overlapLen > 0 {
 				beforePartialTag := bufStr[:len(bufStr)-overlapLen]
 				trailingLen := trailingWhitespaceLen(beforePartialTag)
 				ambiguousStart := len(beforePartialTag) - trailingLen
@@ -260,14 +345,28 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			}
 		}
 
-		if strings.Contains(bufStr, gemma4ThinkingCloseTag) {
-			split := strings.SplitN(bufStr, gemma4ThinkingCloseTag, 2)
-			thinking := strings.TrimRightFunc(split[0], unicode.IsSpace)
-			remaining := strings.TrimLeftFunc(split[1], unicode.IsSpace)
+		// A tool call can open before the thinking channel is closed. The model
+		// is supposed to emit <channel|> first, and usually does -- but when it
+		// does not, this state used to scan for the close tag alone and the
+		// whole call was collected as reasoning. Captured verbatim at the end
+		// of a 17,325-character thinking block:
+		//
+		//   Let's go.<|tool_call>call:editor{end_line:91,...}<tool_call|><|tool_response>
+		//
+		// Complete, well-formed, and invisible: the caller saw a turn with no
+		// tool calls, so the run ended and the edit was never made. Content
+		// state has always checked for both tags; this makes thinking state
+		// symmetric with it. Whichever tag comes first wins, so a close tag
+		// followed by a call still takes the ordinary path below.
+		closeIdx := strings.Index(bufStr, gemma4ThinkingCloseTag)
+		toolIdx := strings.Index(bufStr, gemma4ToolCallOpenTag)
+		if toolIdx != -1 && (closeIdx == -1 || toolIdx < closeIdx) {
+			thinking := strings.TrimRightFunc(bufStr[:toolIdx], unicode.IsSpace)
+			remaining := bufStr[toolIdx+len(gemma4ToolCallOpenTag):]
 
 			p.buffer.Reset()
 			p.buffer.WriteString(remaining)
-			p.state = Gemma4CollectingContent
+			p.state = Gemma4CollectingToolCall
 
 			if len(thinking) > 0 {
 				events = append(events, gemma4EventThinkingContent{content: thinking})
@@ -275,9 +374,27 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			return events, true
 		}
 
-		// Check for partial close tag
+		if closeIdx != -1 {
+			split := strings.SplitN(bufStr, gemma4ThinkingCloseTag, 2)
+			thinking := strings.TrimRightFunc(split[0], unicode.IsSpace)
+			remaining := strings.TrimLeftFunc(split[1], unicode.IsSpace)
+
+			p.buffer.Reset()
+			p.buffer.WriteString(remaining)
+			p.state = Gemma4CollectingContent
+			p.strayChannelName = true
+
+			if len(thinking) > 0 {
+				events = append(events, gemma4EventThinkingContent{content: thinking})
+			}
+			return events, true
+		}
+
+		// Check for a partial close tag -- or a partial tool-call open tag,
+		// which streams in across chunks exactly the same way and would
+		// otherwise have its prefix emitted as reasoning before it completed.
 		if !done {
-			if overlapLen := overlap(bufStr, gemma4ThinkingCloseTag); overlapLen > 0 {
+			if overlapLen := longestOverlap(bufStr, gemma4ThinkingCloseTag, gemma4ToolCallOpenTag); overlapLen > 0 {
 				beforePartialTag := bufStr[:len(bufStr)-overlapLen]
 				trailingLen := trailingWhitespaceLen(beforePartialTag)
 				ambiguousStart := len(beforePartialTag) - trailingLen
@@ -323,10 +440,11 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			p.buffer.WriteString(remaining)
 			p.state = Gemma4IgnoringPostToolCallNoise
 
-			if toolCall, err := parseGemma4ToolCall(toolCallContent, p.tools); err == nil {
+			if toolCall, err := parseGemma4ClosedToolCall(toolCallContent, p.tools); err == nil {
 				events = append(events, gemma4EventToolCall{toolCall: toolCall})
 			} else {
 				slog.Warn("gemma4 tool call parsing failed", "error", err, "content", toolCallContent)
+				events = append(events, gemma4EventContent{content: gemma4UnreadableToolCall(toolCallContent)})
 			}
 			return events, true
 		}
@@ -340,6 +458,7 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 				events = append(events, gemma4EventToolCall{toolCall: toolCall})
 			} else {
 				slog.Warn("gemma4 tool call flush on done failed", "error", err, "content", bufStr)
+				events = append(events, gemma4EventContent{content: gemma4UnreadableToolCall(bufStr)})
 			}
 			return events, false
 		}
@@ -398,6 +517,38 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 
 // parseGemma4ToolCall parses a tool call in Gemma 4 format:
 // call:NAME{key:value,key:value}
+// parseGemma4ClosedToolCall parses a tool call the model finished: its closing
+// tag was emitted, so the call is not truncated and a missing final brace is a
+// formatting slip rather than an argument that never arrived.
+//
+// The general repair path deliberately leaves an unclosed object alone, because
+// closing one that a token limit cut short would turn a partial call into a
+// plausible-looking call with arguments missing. That reasoning does not apply
+// once the model has closed the call itself, and the case is common enough to
+// matter: one missing brace otherwise costs the whole call, which reaches the
+// caller as an empty response with the tool call silently dropped.
+func parseGemma4ClosedToolCall(content string, tools []api.Tool) (api.ToolCall, error) {
+	toolCall, err := parseGemma4ToolCall(content, tools)
+	if err == nil {
+		return toolCall, nil
+	}
+
+	open := strings.Index(content, "{")
+	if open == -1 {
+		return api.ToolCall{}, err
+	}
+
+	closed := content[:open] + repairGemma4MissingObjectClose(content[open:])
+	if closed == content {
+		return api.ToolCall{}, err
+	}
+
+	if toolCall, retryErr := parseGemma4ToolCall(closed, tools); retryErr == nil {
+		return toolCall, nil
+	}
+	return api.ToolCall{}, err
+}
+
 func parseGemma4ToolCall(content string, tools []api.Tool) (api.ToolCall, error) {
 	// Expected format: call:NAME{args}
 	if !strings.HasPrefix(content, "call:") {
@@ -426,12 +577,60 @@ func parseGemma4ToolCall(content string, tools []api.Tool) (api.ToolCall, error)
 		args = repairedArgs
 	}
 
+	// Checked after any repair, because a repair can close a string exactly
+	// where the swallowed name ends.
+	if key, ok := gemma4SwallowedKey(args.ToMap()); ok {
+		return api.ToolCall{}, fmt.Errorf("gemma4 tool call %s: a string argument ends in \",%s:\" and the call has no %q -- the next argument's name was written inside the value; rejected, not repaired", toolName, key, key)
+	}
+
 	return api.ToolCall{
 		Function: api.ToolCallFunction{
 			Name:      toolName,
 			Arguments: args,
 		},
 	}, nil
+}
+
+// gemma4SwallowedKeyRe matches a value whose last characters are an argument
+// name and its colon, glued to a comma: the model wrote the next argument's
+// name inside the string and closed the string after it. Gemma writes ",key:"
+// with no space; prose writes ", then:", so a space after the comma does not
+// match.
+var gemma4SwallowedKeyRe = regexp.MustCompile(`,([A-Za-z_][A-Za-z0-9_]*):$`)
+
+// gemma4SwallowedKey reports a string value, in this object or any object
+// nested in it, that ends in ",<name>:" where <name> is not a key of the same
+// object. The value the model meant for <name> was never generated, so there
+// is nothing to repair: writing the call would put the name into a file and
+// leave the argument out. The same rule as opencoti's engine-side check
+// (bug-3541, gemma4-argument-bleed), so the call is judged the same whichever
+// parser reads it.
+func gemma4SwallowedKey(obj map[string]any) (string, bool) {
+	for _, value := range obj {
+		switch v := value.(type) {
+		case string:
+			m := gemma4SwallowedKeyRe.FindStringSubmatch(strings.TrimRightFunc(v, unicode.IsSpace))
+			if m == nil {
+				continue
+			}
+			if _, present := obj[m[1]]; !present {
+				return m[1], true
+			}
+		case map[string]any:
+			if key, ok := gemma4SwallowedKey(v); ok {
+				return key, true
+			}
+		case []any:
+			for _, item := range v {
+				if nested, isObj := item.(map[string]any); isObj {
+					if key, ok := gemma4SwallowedKey(nested); ok {
+						return key, true
+					}
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // gemma4ArgsToJSON converts Gemma 4's custom argument format to valid JSON.
