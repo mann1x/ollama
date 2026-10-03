@@ -2,37 +2,33 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.34.4`, with llama.cpp `b11081`.** Take the runtime
+**Rebased onto Ollama `v0.35.1`, with llama.cpp `b11232`.** Take the runtime
 archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
-`ollama-windows-amd64-runtime.zip`): the two llama.cpp patches this series
-carries compile into `lib/ollama`, and they are rebuilt here against the new
-llama.cpp pin.
+`ollama-windows-amd64-runtime.zip`): the llama.cpp patches this series carries
+compile into `lib/ollama`, and they are rebuilt here against the new llama.cpp
+pin. A runtime from `0.34.4-thinkbudget` is llama.cpp `b11081` and does not
+match this binary.
 
-- **Thinking budgets follow 0.34.4's model-defined levels.** Upstream moved
-  thinking levels onto the model (a model states the levels it supports and a
-  default). The budget is ported onto that design: `"think": 1500` is still
-  a token budget, and a level name is still a share of the output allowance.
-  `minimal` is no longer raised to `low`, and `xhigh` means `max`. `--think`
-  passes a level name it does not know to the server instead of refusing it.
-  An integer ≤ 0 or a fraction is still refused.
-- **Fixed: a budget was dropped on every model that states its levels.**
-  0.34.4 resolves the requested level before the budget was read, so on
-  qwen3.x, gemma4 and every other model with stated controls, a budget was
-  replaced by the default level's share: `"think": 1500` reached the runner as
-  1024 on a 4096 window. The budget is now read from the request.
-- **Gemma 4: a tool call whose string value swallowed the next argument's
-  name is rejected**, not executed. The shape is a string ending in
-  `,<name>:` where `<name>` is not a key of the same object. It is rejected,
-  never repaired, because repairing a cut value writes the fragment.
+- **`ollama show --modelfile` writes a `TEMPLATE` only when the model carries
+  one.** A model that runs on the template inside its GGUF used to be shown
+  with a generated `TEMPLATE` line, and creating a model from that output
+  replaced the GGUF's template with it.
+- **`ollama create` refuses a quote that swallows the directives after it.** An
+  unclosed `TEMPLATE "…` or `SYSTEM "…` used to take the following `RENDERER`,
+  `PARSER`, `PARAMETER` and other directive lines into its value, and the model was created without
+  them. It is now an error naming the first swallowed line. 0.35.1's new
+  `CAPABILITY` directive is covered.
 
-**Everything else is carried unchanged from `0.34.2-2-thinkbudget`**: the
-response-scoped reasoning budget, the line-boundary close, Gemma 4 E2B/E4B
-assistant drafters, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder parser
-fixes. The full list, with every patch's branch and commit, is `PATCHES.json`
-on the `think-budget` branch.
+**Everything else is carried unchanged from `0.34.4-thinkbudget`**: thinking
+budgets on 0.34.4's model-defined levels, the response-scoped reasoning budget,
+the line-boundary close, Gemma 4 E2B/E4B assistant drafters, and the Gemma 4,
+Qwen 3.5, LFM2 and qwen3-coder parser fixes. The full list, with every patch's
+branch and commit, is `PATCHES.json` on the `think-budget` branch: 24 patches,
+each rebased onto the `v0.35.1` tag.
 
-`go test ./...` passes in full on this tree. The `cmd/launch` test that failed
-on the stock tag under a tmpfs temp dir is fixed here (`up-codex-request-count-mtime`).
+`go test ./...` passes in full on this tree, and llama.cpp's own
+`test-reasoning-budget` passes against `b11232` with the carried patches
+applied.
 
 ## Updating (unchanged since 0.34.2)
 
