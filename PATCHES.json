@@ -18,7 +18,15 @@
     "release": {
       "tag": "v0.35.1-thinkbudget",
       "sha": "1040f03d",
-      "note": "carries all 24 patches at this manifest's shas on v0.35.1 / llama.cpp b11232; built 2026-10-03 by run 37116267125 (all 8 jobs green, the same 8 jobs and 7 assets as v0.34.4-thinkbudget). 1040f03d is f430d02f plus a release-notes commit only, so its inputs digest is f9c1055da0f6 (57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 2334fe35fb4f33c9019be29d390503a82345a3033b8c6960c0fe8764621bc45f; checked after download: sha256sum -c OK for the binary and the runtime, the binary reports 0.35.1-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Cut as part of the v0.35.1 sync (FORK-SYNC R6: a sync delivers the release). Previous: v0.34.4-thinkbudget (449049ae)."
+      "note": "carries all 24 patches at this manifest's shas on v0.35.1 / llama.cpp b11232; built 2026-10-03 by run 37116267125 (all 8 jobs green, the same 8 jobs and 7 assets as v0.34.4-thinkbudget). 1040f03d is f430d02f plus a release-notes commit only, so its inputs digest is f9c1055da0f6 (57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 2334fe35fb4f33c9019be29d390503a82345a3033b8c6960c0fe8764621bc45f; checked after download: sha256sum -c OK for the binary and the runtime, the binary reports 0.35.1-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Cut as part of the v0.35.1 sync (FORK-SYNC R6: a sync delivers the release). Previous: v0.34.4-thinkbudget (449049ae).",
+      "arm64": {
+        "assets": {
+          "ollama-linux-arm64-runtime.tgz": "096e5e43c25d9ba54e0e7a1757e595c26e35a147d09fa0c1e080ef75c5b1570b",
+          "ollama-linux-arm64": "28c565c1dba109587b3571a6ac0f13508c73ce55795071c022df013edebeece1"
+        },
+        "built": "1040f03db004aa1c4aa2648d75237bc97de11a55",
+        "note": "added 2026-10-04 by run 37176344596 (thinkbudget-release.yaml at think-budget, only=arm64) to the release that existed: the other six assets and their checksums are unchanged. Built natively on ubuntu-24.04-arm inside almalinux:8 with clang and gcc-toolset-13, the `cpu` preset (ggml CPU variants armv8.0 to armv9.2, chosen at load); needs glibc 2.27, LOAD segments aligned to 64K. Same inputs as the amd64 runtime: digest 57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec. Checked on dietpi5 (Raspberry Pi 5, Debian 13, 16K pages): llama-server loads and generates (qwen2 0.5b q8_0, 21 tok/s), and the binary serves 0.35.1-thinkbudget with this runtime beside it."
+      }
     }
   },
   "verification": {

@@ -4,7 +4,7 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 **Rebased onto Ollama `v0.35.1`, with llama.cpp `b11232`.** Take the runtime
 archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
-`ollama-windows-amd64-runtime.zip`): the llama.cpp patches this series carries
+`ollama-linux-arm64-runtime.tgz`, `ollama-windows-amd64-runtime.zip`): the llama.cpp patches this series carries
 compile into `lib/ollama`, and they are rebuilt here against the new llama.cpp
 pin. A runtime from `0.34.4-thinkbudget` is llama.cpp `b11081` and does not
 match this binary.
