@@ -431,7 +431,11 @@ jobs:
           docker run --rm -v "$PWD:/src" -w /src -e VERSION \
             -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
             almalinux:8 bash -euo pipefail -c '
-              dnf install -y -q gcc gcc-c++ tar gzip findutils > /dev/null
+              # clang, as upstream's arm64 base has it: the mlx cgo headers
+              # include arm_bf16.h, which the stock gcc 8.5 does not ship
+              # ("fatal error: arm_bf16.h: No such file or directory").
+              dnf install -y -q clang gcc gcc-c++ tar gzip findutils > /dev/null
+              export CC=clang CXX=clang++
               ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
               curl -fsSL "https://go.dev/dl/${ver}.linux-arm64.tar.gz" -o /tmp/go.tar.gz
               tar -C /usr/local -xzf /tmp/go.tar.gz
