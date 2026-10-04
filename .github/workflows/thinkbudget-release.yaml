@@ -431,7 +431,7 @@ jobs:
           docker run --rm -v "$PWD:/src" -w /src -e VERSION \
             -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
             almalinux:8 bash -euo pipefail -c '
-              # clang, as upstream's arm64 base has it: the mlx cgo headers
+              # clang, as the upstream arm64 base has it: the mlx cgo headers
               # include arm_bf16.h, which the stock gcc 8.5 does not ship
               # ("fatal error: arm_bf16.h: No such file or directory").
               dnf install -y -q clang gcc gcc-c++ tar gzip findutils > /dev/null
