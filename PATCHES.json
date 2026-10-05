@@ -26,6 +26,20 @@
         },
         "built": "1040f03db004aa1c4aa2648d75237bc97de11a55",
         "note": "added 2026-10-04 by run 37176344596 (thinkbudget-release.yaml at think-budget, only=arm64) to the release that existed: the other six assets and their checksums are unchanged. Built natively on ubuntu-24.04-arm inside almalinux:8 with clang and gcc-toolset-13, the `cpu` preset (ggml CPU variants armv8.0 to armv9.2, chosen at load); needs glibc 2.27, LOAD segments aligned to 64K. Same inputs as the amd64 runtime: digest 57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec. Checked on dietpi5 (Raspberry Pi 5, Debian 13, 16K pages): llama-server loads and generates (qwen2 0.5b q8_0, 21 tok/s), and the binary serves 0.35.1-thinkbudget with this runtime beside it."
+      },
+      "mlx": {
+        "upstream": "v0.35.1",
+        "MLX_VERSION": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+        "MLX_C_VERSION": "ebc88f10caa1b625e6b581437a8dea6df8a70085",
+        "assets": {
+          "ollama-linux-amd64-mlx.tar.zst": "15ee9a52b60e22d62c3195c70d0a708fbaeb3decb393f2571cbd4e1079608e6b",
+          "ollama-windows-amd64-mlx.zip": "cf941fd96f78022c402fb01d02a28bfa99b635f4f7c9777ecb8048fc00cb3276",
+          "ollama-darwin-mlx.tgz": "79bd8b877f14f0ff3e1defceee769fd1356130e3319625a41b35d9f41283b3dc"
+        },
+        "darwin_source": {
+          "ollama-darwin.tgz": "3137dbf28948ee844e0fb3e584d9b5de6879d73d9f0cb7eff3ad64930601d307"
+        },
+        "note": "added 2026-10-05 by scripts/thinkbudget-mlx-assets.sh to the release that existed; the other assets and their checksums are unchanged. Upstream's MLX payloads, bytes unchanged (owner, 2026-10-05: xollama serves safetensors through MLX on every platform and does not compile it). The Linux and Windows archives are upstream's assets (mlx_cuda_v13), sha256 equal to upstream's sha256sum.txt. ollama-darwin-mlx.tgz holds mlx_metal_v3 (universal x86_64+arm64), mlx_metal_v4 (arm64) and the MLX, MLX-C, xgrammar, dlpack, picojson and fmt licence texts, cut entry for entry from upstream's ollama-darwin.tgz; per-file sha256 in the release asset mlx-runtime.txt."
       }
     }
   },
