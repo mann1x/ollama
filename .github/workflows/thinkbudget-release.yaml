@@ -416,6 +416,8 @@ jobs:
   # plain armv8-a and nothing is tuned to the runner's CPU.
   linux-arm64:
     needs: prepare
+    # Not on `only: mlx-windows`: a rebuild would move the sha256 people pin.
+    if: inputs.only == 'all' || inputs.only == 'arm64'
     runs-on: ubuntu-24.04-arm
     defaults:
       run:
@@ -621,17 +623,42 @@ jobs:
           }
           Get-ChildItem $dir -File | ForEach-Object { "{0,10:N1} MB  {1}" -f ($_.Length/1MB), $_.Name }
       - name: package
-        working-directory: repo/dist/windows-amd64
+        working-directory: repo/dist
         run: |
           $ErrorActionPreference = 'Stop'
-          # upstream's layout: lib/ollama/mlx_*, and its README_MLX.txt
+          # upstream's layout and zipper (scripts/build_windows.ps1): a
+          # windows-amd64-mlx folder holding README_MLX.txt and lib/ollama/mlx_*,
+          # zipped by 7z. tar.exe could not visit the deepest include folders.
+          $stage = Join-Path $PWD 'windows-amd64-mlx'
+          New-Item -ItemType Directory -Force (Join-Path $stage 'lib\ollama') | Out-Null
           'Extract this MLX zip file to the same location where you extracted ollama-windows-amd64.zip' |
-            Set-Content -NoNewline -Encoding ascii README_MLX.txt
-          $mlx = Get-ChildItem lib/ollama -Directory -Filter 'mlx_*' | ForEach-Object { "lib/ollama/$($_.Name)" }
-          & tar.exe -a -c -f ..\..\ollama-windows-amd64-mlx.zip README_MLX.txt @mlx
-          if ($LASTEXITCODE -ne 0) { throw "zip failed" }
-          Get-Item ..\..\ollama-windows-amd64-mlx.zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
-          (Get-FileHash ..\..\ollama-windows-amd64-mlx.zip -Algorithm SHA256).Hash.ToLower()
+            Set-Content -NoNewline -Encoding ascii (Join-Path $stage 'README_MLX.txt')
+          Get-ChildItem windows-amd64\lib\ollama -Directory -Filter 'mlx_*' |
+            Move-Item -Destination (Join-Path $stage 'lib\ollama')
+          $zip = Join-Path (Split-Path $PWD) 'ollama-windows-amd64-mlx.zip'
+          & 7z a -tzip -mx=7 -mmt=on $zip "$stage\*" | Select-Object -Last 3
+          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+          # every file staged is in the zip, and mlx.dll where ollama looks for it
+          $staged = (Get-ChildItem $stage -Recurse -File).Count
+          $listed = & 7z l -slt $zip | Select-String '^Path = '
+          $zipped = (& 7z l -ba $zip | Where-Object { $_ -notmatch ' D\.\.\.\. ' }).Count
+          "staged $staged files, zip lists $zipped"
+          if ($zipped -ne $staged) { throw "the zip holds $zipped files of $staged" }
+          if (-not ($listed | Where-Object { $_.Line -match 'lib\\ollama\\mlx_cuda_v13\\mlx\.dll$' })) { throw "no lib/ollama/mlx_cuda_v13/mlx.dll in the zip" }
+          Get-Item $zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+      # The build takes hours; a packaging fault must not cost another one.
+      - name: keep the build if packaging failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64-mlx
+          path: |
+            repo/dist/windows-amd64-mlx
+            repo/dist/windows-amd64/lib/ollama/mlx_*
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: ignore
       - name: attach to the release
         shell: bash
         working-directory: repo
