@@ -17,10 +17,15 @@ OpenAI tool results. Upstream describes the manifest change as preparation for
 removing that compatibility patch. This build still carries it, with the two
 llama.cpp patches of this series on top.
 
-**Upstream's MLX runtimes are on this release, for every platform**, bytes
-unchanged: `ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip`
-and `ollama-darwin-mlx.tgz`, with `mlx-runtime.txt` listing each file's
-sha256. Safetensors models run on MLX.
+**MLX runtimes are on this release, for every platform**, with
+`mlx-runtime.txt` listing each file's sha256. Safetensors models run on MLX.
+`ollama-linux-amd64-mlx.tar.zst` and `ollama-darwin-mlx.tgz` are upstream's
+bytes, unchanged. `ollama-windows-amd64-mlx.zip` is built here, from the same
+MLX and CMake, with one difference: upstream's `mlx.dll` looks for cuDNN in
+`C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
+in, and panics on the first generation that uses cuDNN on any machine without
+it there. Ours looks next to `mlx.dll`, where the zip puts the cuDNN and CUDA
+DLLs.
 
 **Everything else is carried unchanged from `0.35.1-thinkbudget`**: thinking
 budgets on the model-defined levels, the response-scoped reasoning budget, the
