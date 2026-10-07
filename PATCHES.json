@@ -16,30 +16,30 @@
     "sha": "b47cefb7",
     "note": "the think-budget commit whose tree this patch set describes: b47cefb7, the merge of tag v0.40.0 (0d0720e5) into thinkbudget-0.40.0. LLAMA_CPP_VERSION moves b11232 -> b11351 (#18761); upstream rewrote llama/compat/002-clef.patch and changed llama-ollama-compat.cpp. llama/server + llama/compat inputs digest c5dafb5ce36b (was f9c1055da0f6), computed as git ls-tree -r HEAD -- LLAMA_CPP_VERSION llama/server llama/compat | sha256sum; with the llama/compat/README.md line excluded (xollama's runtime-pin definition) it is 9defcc4413930651433008f477efa9c7e54ab33bb6618f7eb032cbe8a8e66df2 (was 57004c3c...). The manifest commits after it touch only this file. Its tree is the apply-order replay from v0.40.0 (53e450e1) plus this branch's own files only: the release workflow and notes, CLAUDE.md, PATCHES.json, .gitattributes, scripts/thinkbudget-install.ps1, scripts/thinkbudget-mlx-assets.sh, scripts/thinkbudget-mlx-darwin.py and the fork update feed (app/cmd/app/app.go, app/updater/*); upstream changed none of those between v0.35.1 and v0.40.0. Upstream v0.40.0 also carries 75b95278 'llama-server: prepare to remove compatibility patch' (manifest lists, compatmigrate/); llama/compat still exists at this tag and 004 and 005 are carried as before.",
     "release": {
-      "tag": "v0.35.1-thinkbudget",
-      "sha": "1040f03d",
-      "note": "SUPERSEDED BY THE v0.40.0 SYNC, release pending: v0.40.0-thinkbudget is cut from this branch next and recorded here in a following commit. Until then this block still describes v0.35.1-thinkbudget. carries all 24 patches at this manifest's shas on v0.35.1 / llama.cpp b11232; built 2026-10-03 by run 37116267125 (all 8 jobs green, the same 8 jobs and 7 assets as v0.34.4-thinkbudget). 1040f03d is f430d02f plus a release-notes commit only, so its inputs digest is f9c1055da0f6 (57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 2334fe35fb4f33c9019be29d390503a82345a3033b8c6960c0fe8764621bc45f; checked after download: sha256sum -c OK for the binary and the runtime, the binary reports 0.35.1-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Cut as part of the v0.35.1 sync (FORK-SYNC R6: a sync delivers the release). Previous: v0.34.4-thinkbudget (449049ae).",
+      "tag": "v0.40.0-thinkbudget",
+      "sha": "2630dba7",
+      "note": "carries all 24 patches at this manifest's shas on v0.40.0 / llama.cpp b11351; built 2026-10-07 by run 37593035359 (all 9 jobs green: prepare, three binaries, linux-runtime, linux-arm64, windows-runtime, windows-app, checksums). 2630dba7 is b47cefb7 plus the manifest commit 31a935d6 and a release-notes commit only, so its inputs digest is c5dafb5ce36b (9defcc4413930651433008f477efa9c7e54ab33bb6618f7eb032cbe8a8e66df2 with the README line excluded, xollama's runtime-pin definition). ollama-linux-amd64-runtime.tgz sha256 f318ff34955ad9dba736ee3b8d7ac2b2ed0f6993f00a18243558fda36938d39c; ollama-linux-amd64 sha256 8745bdc6d5cd38829547fb22f60ee5eb798774b8f77437829504d5f7d7488ea2. Checked after download: sha256sum -c OK for the binary and both Linux runtimes, the binary reports 0.40.0-thinkbudget with a glibc floor of 2.28, libllama-common carries --reasoning-budget-scope. Cut as part of the v0.40.0 sync (FORK-SYNC R6). Previous: v0.35.1-thinkbudget (1040f03d).",
       "arm64": {
         "assets": {
-          "ollama-linux-arm64-runtime.tgz": "096e5e43c25d9ba54e0e7a1757e595c26e35a147d09fa0c1e080ef75c5b1570b",
-          "ollama-linux-arm64": "28c565c1dba109587b3571a6ac0f13508c73ce55795071c022df013edebeece1"
+          "ollama-linux-arm64-runtime.tgz": "f6fcc0c8886c5912667b421790cc0c06e81aa3b6eaf5e0eb3c08f7abf2b5a1fb",
+          "ollama-linux-arm64": "9e8f90a2d826f5f7a7d615fcaf244f8706b82cf8bbedd861f03499387d75e3db"
         },
-        "built": "1040f03db004aa1c4aa2648d75237bc97de11a55",
-        "note": "added 2026-10-04 by run 37176344596 (thinkbudget-release.yaml at think-budget, only=arm64) to the release that existed: the other six assets and their checksums are unchanged. Built natively on ubuntu-24.04-arm inside almalinux:8 with clang and gcc-toolset-13, the `cpu` preset (ggml CPU variants armv8.0 to armv9.2, chosen at load); needs glibc 2.27, LOAD segments aligned to 64K. Same inputs as the amd64 runtime: digest 57004c3cf4266c4c1649add853a7ba0499d02a7b10faf98efa5617391cd2c0ec. Checked on dietpi5 (Raspberry Pi 5, Debian 13, 16K pages): llama-server loads and generates (qwen2 0.5b q8_0, 21 tok/s), and the binary serves 0.35.1-thinkbudget with this runtime beside it."
+        "built": "2630dba76cac84d9d9738896b7a92549986168b6",
+        "note": "built in the same run (37593035359, job linux-arm64) from the same commit as the amd64 runtime, so the same inputs digest. sha256sum -c OK for the runtime after download; not run on arm64 hardware in this sync."
       },
       "mlx": {
-        "upstream": "v0.35.1",
-        "MLX_VERSION": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+        "upstream": "v0.40.0",
+        "MLX_VERSION": "264c14fe650e1dd9bb0c3902dc06b08033d8f89c",
         "MLX_C_VERSION": "ebc88f10caa1b625e6b581437a8dea6df8a70085",
         "assets": {
-          "ollama-linux-amd64-mlx.tar.zst": "15ee9a52b60e22d62c3195c70d0a708fbaeb3decb393f2571cbd4e1079608e6b",
-          "ollama-windows-amd64-mlx.zip": "cf941fd96f78022c402fb01d02a28bfa99b635f4f7c9777ecb8048fc00cb3276",
-          "ollama-darwin-mlx.tgz": "79bd8b877f14f0ff3e1defceee769fd1356130e3319625a41b35d9f41283b3dc"
+          "ollama-linux-amd64-mlx.tar.zst": "02bc27eb1820a4f68f614522c474cf6c2bd25e01791c5dca577d1ea551cb7c5b",
+          "ollama-windows-amd64-mlx.zip": "c0ea38f2e42e298bf023f6ce1e48dcf9dc2b757d1e72f281dc0e2092ca6388d1",
+          "ollama-darwin-mlx.tgz": "b6d4d8febc13f9aab11b03eb92613289850f472e0581cb6dc5596f6618bfcac6"
         },
         "darwin_source": {
-          "ollama-darwin.tgz": "3137dbf28948ee844e0fb3e584d9b5de6879d73d9f0cb7eff3ad64930601d307"
+          "ollama-darwin.tgz": "b490b4925a95c5f3dfcd889e566cf3dcd727848d59057fb00b03f1d6630326dc"
         },
-        "note": "added 2026-10-05 by scripts/thinkbudget-mlx-assets.sh to the release that existed; the other assets and their checksums are unchanged. Upstream's MLX payloads, bytes unchanged (owner, 2026-10-05: xollama serves safetensors through MLX on every platform and does not compile it). The Linux and Windows archives are upstream's assets (mlx_cuda_v13), sha256 equal to upstream's sha256sum.txt. ollama-darwin-mlx.tgz holds mlx_metal_v3 (universal x86_64+arm64), mlx_metal_v4 (arm64) and the MLX, MLX-C, xgrammar, dlpack, picojson and fmt licence texts, cut entry for entry from upstream's ollama-darwin.tgz; per-file sha256 in the release asset mlx-runtime.txt."
+        "note": "uploaded 2026-10-07 by scripts/thinkbudget-mlx-assets.sh v0.40.0 --upload, after the release existed. The Linux and Windows archives are upstream's files and their sha256 equals upstream's sha256sum.txt (compared independently of the script); ollama-darwin-mlx.tgz is cut entry for entry from upstream's ollama-darwin.tgz: mlx_metal_v3 (universal), mlx_metal_v4 (arm64) and seven licence texts, no llama-server, libllama or ggml. mlx-runtime.txt (sha256 5152a3a543e2db4b65f15d3d9b5516fdca48f2920a184ea07c892573c5ff1511) lists every file. MLX_VERSION moved from 64ea011c (v0.35.1); MLX_C_VERSION is unchanged. The published digests equal the local files."
       }
     }
   },
