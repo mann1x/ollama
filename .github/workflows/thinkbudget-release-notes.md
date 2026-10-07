@@ -2,32 +2,35 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.35.1`, with llama.cpp `b11232`.** Take the runtime
+**Rebased onto Ollama `v0.40.0`, with llama.cpp `b11351`.** Take the runtime
 archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
 `ollama-linux-arm64-runtime.tgz`, `ollama-windows-amd64-runtime.zip`): the llama.cpp patches this series carries
 compile into `lib/ollama`, and they are rebuilt here against the new llama.cpp
-pin. A runtime from `0.34.4-thinkbudget` is llama.cpp `b11081` and does not
+pin. A runtime from `0.35.1-thinkbudget` is llama.cpp `b11232` and does not
 match this binary.
 
-- **`ollama show --modelfile` writes a `TEMPLATE` only when the model carries
-  one.** A model that runs on the template inside its GGUF used to be shown
-  with a generated `TEMPLATE` line, and creating a model from that output
-  replaced the GGUF's template with it.
-- **`ollama create` refuses a quote that swallows the directives after it.** An
-  unclosed `TEMPLATE "…` or `SYSTEM "…` used to take the following `RENDERER`,
-  `PARSER`, `PARAMETER` and other directive lines into its value, and the model was created without
-  them. It is now an error naming the first swallowed line. 0.35.1's new
-  `CAPABILITY` directive is covered.
+What 0.40.0 itself brings is upstream's, unchanged here: runner-specific
+manifests under one tag, with older Ollama GGUFs converted on first load to a
+form llama.cpp reads without Ollama's compatibility patch; multimodal
+embeddings; decision models on MLX (System One); and image positions kept in
+OpenAI tool results. Upstream describes the manifest change as preparation for
+removing that compatibility patch. This build still carries it, with the two
+llama.cpp patches of this series on top.
 
-**Everything else is carried unchanged from `0.34.4-thinkbudget`**: thinking
-budgets on 0.34.4's model-defined levels, the response-scoped reasoning budget,
-the line-boundary close, Gemma 4 E2B/E4B assistant drafters, and the Gemma 4,
-Qwen 3.5, LFM2 and qwen3-coder parser fixes. The full list, with every patch's
-branch and commit, is `PATCHES.json` on the `think-budget` branch: 24 patches,
-each rebased onto the `v0.35.1` tag.
+**Upstream's MLX runtimes are on this release, for every platform**, bytes
+unchanged: `ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip`
+and `ollama-darwin-mlx.tgz`, with `mlx-runtime.txt` listing each file's
+sha256. Safetensors models run on MLX.
+
+**Everything else is carried unchanged from `0.35.1-thinkbudget`**: thinking
+budgets on the model-defined levels, the response-scoped reasoning budget, the
+line-boundary close, Gemma 4 E2B/E4B assistant drafters, the Modelfile
+round-trip fixes, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder parser fixes.
+The full list, with every patch's branch and commit, is `PATCHES.json` on the
+`think-budget` branch: 24 patches, each rebased onto the `v0.40.0` tag.
 
 `go test ./...` passes in full on this tree, and llama.cpp's own
-`test-reasoning-budget` passes against `b11232` with the carried patches
+`test-reasoning-budget` passes against `b11351` with the carried patches
 applied.
 
 ## Updating (unchanged since 0.34.2)
