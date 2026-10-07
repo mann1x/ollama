@@ -40,6 +40,14 @@ on:
         type: choice
         options: [all, arm64, mlx-windows]
         default: all
+      asset_suffix:
+        description: "added to the names of the assets this run uploads (before the extension), e.g. -2630dba7: a rebuild goes beside the assets people pin, not over them"
+        type: string
+        default: ""
+      replace:
+        description: "replace an asset of the same name that is already on the release. Off, an upload of a name that exists fails: people pin these by sha256"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,13 +55,17 @@ permissions:
 env:
   GH_TOKEN: ${{ github.token }}
   GOTOOLCHAIN: auto
+  SUFFIX: ${{ inputs.asset_suffix }}
+  # Replace an existing asset only when asked: a release asset xollama pins
+  # is never re-uploaded with different bytes.
+  CLOBBER: ${{ inputs.replace && '--clobber' || '' }}
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       # `only: arm64` adds to a release other people already pin by sha256:
       # deleting and rebuilding it would move every checksum they hold.
       - name: the release to add to exists
@@ -103,7 +115,7 @@ jobs:
         shell: bash
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       # macos-latest (arm64) ships no Go: "go: command not found". Install the
       # current release into the runner temp and put it on PATH for the steps
       # that follow; GOTOOLCHAIN=auto then pulls whatever go.mod asks for.
@@ -187,7 +199,7 @@ jobs:
         run: ./${{ matrix.out }} --version || true
       - name: attach to the release
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" "${{ matrix.asset }}" --clobber
+        run: gh release upload "${{ inputs.tag }}" "${{ matrix.asset }}" $CLOBBER
 
   # The half that carries the sampler. Only the base runtime is built: the patch
   # lives in libllama-common, and ggml-cuda talks to it through ggml's C ABI, so
@@ -250,8 +262,9 @@ jobs:
           Compress-Archive -Path dist/lib/ollama/* -DestinationPath ollama-windows-amd64-runtime.zip -Force
           Get-Item ollama-windows-amd64-runtime.zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
       - name: attach to the release
+        shell: bash
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" ollama-windows-amd64-runtime.zip --clobber
+        run: gh release upload "${{ inputs.tag }}" ollama-windows-amd64-runtime.zip $CLOBBER
 
   # The same half, for Linux, and for the same reason: without it a tester on
   # Linux has the binary asking for behaviour the runtime does not have, which
@@ -270,7 +283,7 @@ jobs:
         shell: bash
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       - name: build the runtime
         working-directory: repo
         run: |
@@ -320,7 +333,7 @@ jobs:
           ls -la ollama-linux-amd64-runtime.tgz
       - name: attach to the release
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" ollama-linux-amd64-runtime.tgz --clobber
+        run: gh release upload "${{ inputs.tag }}" ollama-linux-amd64-runtime.tgz $CLOBBER
 
   # The tray app, which is the half that decides whether this install replaces
   # itself. Stock `ollama app.exe` checks ollama.com, is offered the official
@@ -341,7 +354,7 @@ jobs:
         shell: bash
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       # app/ui/app.go carries `//go:embed app/dist`, and embed fails the build
       # outright when the directory does not exist -- "pattern app/dist: no
       # matching files found". The React app has to be built before Go is run.
@@ -405,7 +418,7 @@ jobs:
         working-directory: repo
         run: |
           cp "ollama app.exe" ollama-app-windows-amd64.exe
-          gh release upload "${{ inputs.tag }}" ollama-app-windows-amd64.exe --clobber
+          gh release upload "${{ inputs.tag }}" ollama-app-windows-amd64.exe $CLOBBER
 
   # Linux arm64: the binary and the CPU runtime, for a Raspberry Pi 5 class
   # machine and for xollama's arm64 packages, which pin the runtime archive.
@@ -424,7 +437,7 @@ jobs:
         shell: bash
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       - name: build the binary (inside almalinux 8)
         working-directory: repo
         env:
@@ -500,7 +513,13 @@ jobs:
           ls -la ollama-linux-arm64-runtime.tgz
       - name: attach to the release
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" ollama-linux-arm64 ollama-linux-arm64-runtime.tgz --clobber
+        run: |
+          bin="ollama-linux-arm64${SUFFIX}"
+          rt="ollama-linux-arm64-runtime${SUFFIX}.tgz"
+          [ "$bin" = ollama-linux-arm64 ] || cp ollama-linux-arm64 "$bin"
+          [ "$rt" = ollama-linux-arm64-runtime.tgz ] || cp ollama-linux-arm64-runtime.tgz "$rt"
+          sha256sum "$bin" "$rt"
+          gh release upload "${{ inputs.tag }}" "$bin" "$rt" $CLOBBER
 
   # Upstream's Windows MLX runtime, built here so it loads on a machine that
   # does not have the CUDA toolkit and cuDNN installed where upstream's build
@@ -662,7 +681,11 @@ jobs:
       - name: attach to the release
         shell: bash
         working-directory: repo
-        run: gh release upload "${{ inputs.tag }}" ollama-windows-amd64-mlx.zip --clobber
+        run: |
+          zip="ollama-windows-amd64-mlx${SUFFIX}.zip"
+          [ "$zip" = ollama-windows-amd64-mlx.zip ] || cp ollama-windows-amd64-mlx.zip "$zip"
+          sha256sum "$zip"
+          gh release upload "${{ inputs.tag }}" "$zip" $CLOBBER
 
   checksums:
     needs: [build, windows-runtime, linux-runtime, linux-arm64, windows-app, windows-mlx]
@@ -670,7 +693,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: clone
-        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
       - name: sha256
         working-directory: repo
         run: |
