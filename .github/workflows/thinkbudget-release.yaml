@@ -36,7 +36,7 @@ on:
         default: v0.34.0-thinkbudget
         required: true
       only:
-        description: "all: cut the release anew. arm64: add the Linux arm64 assets to the release that exists, leaving the others as they are. mlx-windows: build the Windows MLX runtime and replace that one asset"
+        description: "all: cut the release anew. arm64: add the Linux arm64 assets to the release that exists, leaving the others as they are. mlx-windows: build the Windows MLX runtime with relative CUDA/cuDNN folders and add it (use asset_suffix -reldir)"
         type: choice
         options: [all, arm64, mlx-windows]
         default: all
@@ -537,7 +537,11 @@ jobs:
   # cache variable to the MLX build, so upstream's CMake is used unchanged.
   windows-mlx:
     needs: prepare
-    if: inputs.only == 'all' || inputs.only == 'mlx-windows'
+    # Its own dispatch (only: mlx-windows, asset_suffix: -reldir), never part of
+    # `all`: a full release republishes upstream's ollama-windows-amd64-mlx.zip
+    # under that name (scripts/thinkbudget-mlx-assets.sh), and this build next
+    # to it, so the two never share a name.
+    if: inputs.only == 'mlx-windows'
     # windows-latest no longer carries VS 2022, and nvcc 13.0 takes no newer MSVC.
     runs-on: windows-2022
     timeout-minutes: 360
