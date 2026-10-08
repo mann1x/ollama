@@ -2,41 +2,42 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.40.0`, with llama.cpp `b11351`.** Take the runtime
-archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
-`ollama-linux-arm64-runtime.tgz`, `ollama-windows-amd64-runtime.zip`): the llama.cpp patches this series carries
-compile into `lib/ollama`, and they are rebuilt here against the new llama.cpp
-pin. A runtime from `0.35.1-thinkbudget` is llama.cpp `b11232` and does not
-match this binary.
+**Rebased onto Ollama `v0.40.1`, still with llama.cpp `b11351`.** Take the
+runtime archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
+`ollama-linux-arm64-runtime.tgz`, `ollama-windows-amd64-runtime.zip`). The
+llama.cpp pin and the patches this series carries are the same as in
+`0.40.0-thinkbudget`, but the runtime is rebuilt here: upstream's 0.40.1 fixes
+reading the head of a model file past 2 GiB on Windows (`llama/clef`), and that
+code compiles into `llama-server`.
 
-What 0.40.0 itself brings is upstream's, unchanged here: runner-specific
-manifests under one tag, with older Ollama GGUFs converted on first load to a
-form llama.cpp reads without Ollama's compatibility patch; multimodal
-embeddings; decision models on MLX (System One); and image positions kept in
-OpenAI tool results. Upstream describes the manifest change as preparation for
-removing that compatibility patch. This build still carries it, with the two
-llama.cpp patches of this series on top.
+What 0.40.1 itself brings is upstream's, unchanged here: the clef fix above,
+manifests that no longer use symlinks on Windows, cloud usage and balance APIs
+proxied by the server, a shorter CLI onboarding, and a newer MLX
+(`a59cc231`, which now carries the Metal residency fix upstream used to patch
+in).
 
 **MLX runtimes are on this release, for every platform**, with
 `mlx-runtime.txt` listing each file's sha256. Safetensors models run on MLX.
-`ollama-linux-amd64-mlx.tar.zst` and `ollama-darwin-mlx.tgz` are upstream's
-bytes, unchanged. `ollama-windows-amd64-mlx.zip` is built here, from the same
-MLX and CMake, with one difference: upstream's `mlx.dll` looks for cuDNN in
+`ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip` and
+`ollama-darwin-mlx.tgz` are upstream's bytes, unchanged.
+`ollama-windows-amd64-mlx-reldir.zip` is built here from the same MLX and
+CMake, with one difference: upstream's `mlx.dll` looks for cuDNN in
 `C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
 in, and panics on the first generation that uses cuDNN on any machine without
 it there. Ours looks next to `mlx.dll`, where the zip puts the cuDNN and CUDA
-DLLs.
+DLLs. On Windows, use the `-reldir` zip. It takes a few hours to build and is
+added to this release when it is ready.
 
-**Everything else is carried unchanged from `0.35.1-thinkbudget`**: thinking
+**Everything else is carried unchanged from `0.40.0-thinkbudget`**: thinking
 budgets on the model-defined levels, the response-scoped reasoning budget, the
 line-boundary close, Gemma 4 E2B/E4B assistant drafters, the Modelfile
 round-trip fixes, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder parser fixes.
 The full list, with every patch's branch and commit, is `PATCHES.json` on the
-`think-budget` branch: 24 patches, each rebased onto the `v0.40.0` tag.
+`think-budget` branch: 24 patches, each rebased onto the `v0.40.1` tag.
 
-`go test ./...` passes in full on this tree, and llama.cpp's own
-`test-reasoning-budget` passes against `b11351` with the carried patches
-applied.
+`go test ./...` passes in full on this tree. The llama.cpp sources and the
+carried patches are byte-identical to `0.40.0-thinkbudget`'s, where
+llama.cpp's own `test-reasoning-budget` passes against `b11351`.
 
 ## Updating (unchanged since 0.34.2)
 
