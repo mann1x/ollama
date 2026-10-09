@@ -2,38 +2,44 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.40.1`, still with llama.cpp `b11351`.** Take the
-runtime archive as well as the binary (`ollama-linux-amd64-runtime.tgz`,
-`ollama-linux-arm64-runtime.tgz`, `ollama-windows-amd64-runtime.zip`). The
-llama.cpp pin and the patches this series carries are the same as in
-`0.40.0-thinkbudget`, but the runtime is rebuilt here: upstream's 0.40.1 fixes
-reading the head of a model file past 2 GiB on Windows (`llama/clef`), and that
-code compiles into `llama-server`.
+**Rebased onto Ollama `v0.40.2`, still with llama.cpp `b11351`.** Only the
+`ollama` binaries are new. Nothing the llama runtime is compiled from changed
+since `0.40.1-thinkbudget`, so the runtime archives here
+(`ollama-linux-amd64-runtime.tgz`, `ollama-linux-arm64-runtime.tgz`,
+`ollama-windows-amd64-runtime.zip`) are that release's files, byte for byte,
+with the same sha256. If you already have them, keep them.
 
-What 0.40.1 itself brings is upstream's, unchanged here: the clef fix above,
-manifests that no longer use symlinks on Windows, cloud usage and balance APIs
-proxied by the server, a shorter CLI onboarding, and a newer MLX
-(`a59cc231`, which now carries the Metal residency fix upstream used to patch
-in).
+What 0.40.2 itself brings is upstream's, unchanged here: `ollama list` no
+longer shows a second entry for a model Ollama has converted, and
+`ollama launch claude` uses the model's full context length.
+
+**About the "model upgrades" in upstream's 0.40.2 notes.** That behaviour is
+not new in 0.40.2: it arrived in 0.40.0 and is in every build since, this
+series included. The first time a model stored in Ollama's older GGUF layout is
+loaded, the server writes a second copy in a layout plain llama.cpp reads, in
+the background, and uses that copy afterwards. The original stays on disk as
+the copy an older Ollama can still read, so an affected model takes roughly
+twice its size until the backup is removed. It is skipped when disk space is
+short. Upstream's notes carry a script that deletes the backups.
 
 **MLX runtimes are on this release, for every platform**, with
 `mlx-runtime.txt` listing each file's sha256. Safetensors models run on MLX.
 `ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip` and
-`ollama-darwin-mlx.tgz` are upstream's bytes, unchanged.
-`ollama-windows-amd64-mlx-reldir.zip` is built here from the same MLX and
-CMake, with one difference: upstream's `mlx.dll` looks for cuDNN in
-`C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
+`ollama-darwin-mlx.tgz` are upstream's 0.40.2 bytes, unchanged.
+`ollama-windows-amd64-mlx-reldir.zip` is the file from `0.40.1-thinkbudget`
+(MLX `a59cc231`, which 0.40.2 still uses): built here from the same MLX and
+CMake as upstream's, with one difference. Upstream's `mlx.dll` looks for cuDNN
+in `C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
 in, and panics on the first generation that uses cuDNN on any machine without
 it there. Ours looks next to `mlx.dll`, where the zip puts the cuDNN and CUDA
-DLLs. On Windows, use the `-reldir` zip. It takes a few hours to build and is
-added to this release when it is ready.
+DLLs. On Windows, use the `-reldir` zip.
 
-**Everything else is carried unchanged from `0.40.0-thinkbudget`**: thinking
+**Everything else is carried unchanged from `0.40.1-thinkbudget`**: thinking
 budgets on the model-defined levels, the response-scoped reasoning budget, the
 line-boundary close, Gemma 4 E2B/E4B assistant drafters, the Modelfile
 round-trip fixes, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder parser fixes.
 The full list, with every patch's branch and commit, is `PATCHES.json` on the
-`think-budget` branch: 24 patches, each rebased onto the `v0.40.1` tag.
+`think-budget` branch: 24 patches, each rebased onto the `v0.40.2` tag.
 
 `go test ./...` passes in full on this tree. The llama.cpp sources and the
 carried patches are byte-identical to `0.40.0-thinkbudget`'s, where
