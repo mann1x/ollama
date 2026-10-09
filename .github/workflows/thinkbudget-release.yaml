@@ -1,0 +1,758 @@
+# Test builds of the thinking-budget branch, for people who want to try it
+# without building it themselves.
+#
+# The Go binary alone used to be enough: the llama.cpp runtime the budget needed
+# was b10091, exactly what stock 0.32.5 ships, so a tester dropped the binary
+# over an existing install and kept everything else. That stopped being true
+# when the budget sampler itself changed -- llama/compat now patches
+# common/reasoning-budget.*, which compiles into lib/ollama, not into ollama.exe.
+# Shipping only the binary would ship the half that asks for behaviour the
+# runtime does not have, which looks exactly like the feature not working. So
+# the runtime is built here too and attached as its own archive: on Windows
+# with the MSYS2 clang64 toolchain the shipped DLLs are built with, and on
+# Linux inside AlmaLinux 8 so it loads on the glibc the binary already targets.
+#
+# Deliberately uses no third-party actions — not actions/checkout, not
+# setup-go, not upload-artifact. A fork whose policy is "local_only" blocks
+# those and the run sits queued forever. git and gh are preinstalled on every
+# hosted runner; go is preinstalled on the Linux and Windows images but not on
+# the arm64 macOS one, so the build job fetches it from go.dev when it is
+# missing rather than depending on anything it cannot see.
+name: thinkbudget test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: branch, tag or SHA to build
+        default: thinkbudget-0.34.0
+        required: true
+      version:
+        description: version string stamped into the binary
+        default: 0.34.0-thinkbudget
+        required: true
+      tag:
+        description: release tag to create
+        default: v0.34.0-thinkbudget
+        required: true
+      only:
+        description: "all: cut the release anew. arm64: add the Linux arm64 assets to the release that exists, leaving the others as they are. mlx-windows: build the Windows MLX runtime with relative CUDA/cuDNN folders and add it (use asset_suffix -reldir)"
+        type: choice
+        options: [all, arm64, mlx-windows]
+        default: all
+      asset_suffix:
+        description: "added to the names of the assets this run uploads (before the extension), e.g. -2630dba7: a rebuild goes beside the assets people pin, not over them"
+        type: string
+        default: ""
+      runtimes_from:
+        description: "a fork release tag (e.g. v0.40.1-thinkbudget) whose llama runtimes are put on this release unchanged instead of being rebuilt. Refused unless the llama inputs digest is the same at both commits. Empty: build them"
+        type: string
+        default: ""
+      replace:
+        description: "replace an asset of the same name that is already on the release. Off, an upload of a name that exists fails: people pin these by sha256"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GOTOOLCHAIN: auto
+  SUFFIX: ${{ inputs.asset_suffix }}
+  RUNTIMES_FROM: ${{ inputs.runtimes_from }}
+  # Replace an existing asset only when asked: a release asset xollama pins
+  # is never re-uploaded with different bytes.
+  CLOBBER: ${{ inputs.replace && '--clobber' || '' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      # `only: arm64` adds to a release other people already pin by sha256:
+      # deleting and rebuilding it would move every checksum they hold.
+      - name: the release to add to exists
+        if: inputs.only != 'all'
+        run: gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json tagName,targetCommitish
+      - name: create the release
+        if: inputs.only == 'all'
+        working-directory: repo
+        run: |
+          gh release delete "${{ inputs.tag }}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${{ inputs.tag }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "ollama ${{ inputs.version }} — thinking budget test build" \
+            --prerelease \
+            --notes-file .github/workflows/thinkbudget-release-notes.md
+
+  build:
+    needs: prepare
+    if: inputs.only == 'all'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: ollama-linux-amd64
+            out: ollama
+            extldflags: ""
+          - os: windows-latest
+            asset: ollama-windows-amd64.exe
+            out: ollama.exe
+            # A cgo build on the runner links against the toolchain's mingw
+            # runtime and imports libwinpthread-1.dll, which no clean Windows
+            # install has: the binary dies at load with 0xC0000135
+            # (STATUS_DLL_NOT_FOUND) before main() runs. It went unnoticed
+            # because every machine it had been tried on -- the runner itself
+            # included -- carries MSYS2. Link it in instead.
+            extldflags: "-extldflags=-static"
+          - os: macos-latest
+            asset: ollama-darwin-arm64
+            out: ollama
+            # Not on darwin: the system libc is not available statically and
+            # the link fails outright.
+            extldflags: ""
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      # macos-latest (arm64) ships no Go: "go: command not found". Install the
+      # current release into the runner temp and put it on PATH for the steps
+      # that follow; GOTOOLCHAIN=auto then pulls whatever go.mod asks for.
+      - name: ensure go
+        run: |
+          if command -v go > /dev/null; then go version; exit 0; fi
+          case "$(uname -s)" in Darwin) os=darwin ;; *) os=linux ;; esac
+          case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
+          ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+          curl -fsSL "https://go.dev/dl/${ver}.${os}-${arch}.tar.gz" -o "$RUNNER_TEMP/go.tar.gz"
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tar.gz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+      - name: go version
+        run: go version
+      # ubuntu-latest is 24.04, so a cgo build there links against glibc 2.39
+      # and the binary will not start on anything older than 2.34 — Ubuntu
+      # 20.04, Debian 11, RHEL 8 all refuse it. Build the linux binary inside
+      # AlmaLinux 8 (glibc 2.28) instead, which is what a tester on an older
+      # distro needs; -ldl is required there because dlopen only moved into
+      # libc proper in 2.34.
+      - name: build (linux, inside almalinux 8)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: repo
+        env:
+          VERSION: ${{ inputs.version }}
+          OUT: ${{ matrix.out }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e VERSION -e OUT \
+            -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
+            almalinux:8 bash -euo pipefail -c '
+              # gcc-c++ is not optional: the final link pulls in -lstdc++ and
+              # plain gcc leaves it out ("cannot find -lstdc++").
+              dnf install -y -q gcc gcc-c++ tar gzip findutils > /dev/null
+              ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+              curl -fsSL "https://go.dev/dl/${ver}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+              tar -C /usr/local -xzf /tmp/go.tar.gz
+              export PATH=/usr/local/go/bin:$PATH
+              go version
+              go build -trimpath \
+                -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$VERSION -X=github.com/ollama/ollama/server.mode=release" \
+                -o "$OUT" .
+            '
+          sudo chown "$(id -u):$(id -g)" "$OUT"
+          cp "$OUT" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
+          # prove the portability claim rather than assuming it
+          objdump -T "${{ matrix.asset }}" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
+      # -s -w is not optional: an unstripped cgo build produces a PE that
+      # Windows refuses to load ("This app can't run on your PC").
+      - name: build
+        if: matrix.os != 'ubuntu-latest'
+        working-directory: repo
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w ${{ matrix.extldflags }} -X=github.com/ollama/ollama/version.Version=${{ inputs.version }} -X=github.com/ollama/ollama/server.mode=release" \
+            -o "${{ matrix.out }}" .
+          cp "${{ matrix.out }}" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
+      # The runner cannot smoke-test its way to this answer: it has the mingw
+      # DLLs, so a binary that depends on them starts here and dies on a user's
+      # machine. Read the import table instead. Anything outside the Windows
+      # system set has to be absent from the file.
+      - name: no third-party DLL imports
+        if: matrix.os == 'windows-latest'
+        working-directory: repo
+        run: |
+          bad=0
+          for dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll libgomp-1.dll; do
+            if grep -qa "$dll" "${{ matrix.asset }}"; then
+              echo "::error::${{ matrix.asset }} still references $dll; it will not load on a clean Windows install"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] && echo "no third-party DLL references found"
+          exit "$bad"
+      - name: smoke test
+        working-directory: repo
+        if: matrix.os != 'macos-latest'
+        run: ./${{ matrix.out }} --version || true
+      - name: attach to the release
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" "${{ matrix.asset }}" $CLOBBER
+
+  # The half that carries the sampler. Only the base runtime is built: the patch
+  # lives in libllama-common, and ggml-cuda talks to it through ggml's C ABI, so
+  # a tester keeps the CUDA backend their install already has.
+  # No rebuild unless it is needed: when nothing the runtime is compiled from
+  # changed since an earlier fork release, that release's runtimes go on this
+  # one byte for byte, and whoever pins them by sha256 moves only the tag.
+  # "Nothing changed" is the inputs digest xollama checks (FORK-SYNC R6):
+  # LLAMA_CPP_VERSION, llama/server, llama/compat and llama/clef, the
+  # llama/compat/README.md line left out.
+  reuse-runtimes:
+    needs: prepare
+    if: inputs.only == 'all' && inputs.runtimes_from != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      - name: the inputs are the ones those runtimes were built from
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          from=$(gh release view "$RUNTIMES_FROM" --repo "${{ github.repository }}" --json targetCommitish -q .targetCommitish)
+          git fetch -q --depth 1 origin "$from"
+          digest() { git ls-tree -r "$1" -- LLAMA_CPP_VERSION llama/server llama/compat llama/clef | grep -v '[[:space:]]llama/compat/README\.md$' | sha256sum | cut -d' ' -f1; }
+          here=$(digest HEAD); there=$(digest FETCH_HEAD)
+          echo "inputs at $(git rev-parse HEAD): $here"
+          echo "inputs at $from ($RUNTIMES_FROM): $there"
+          [ "$here" = "$there" ] || { echo "the llama inputs changed since $RUNTIMES_FROM: build the runtimes (leave runtimes_from empty)"; exit 1; }
+      - name: put them on this release, unchanged
+        run: |
+          set -euo pipefail
+          mkdir rt && cd rt
+          for a in ollama-linux-amd64-runtime.tgz ollama-linux-arm64-runtime.tgz ollama-windows-amd64-runtime.zip; do
+            gh release download "$RUNTIMES_FROM" --repo "${{ github.repository }}" --pattern "$a"
+          done
+          gh release download "$RUNTIMES_FROM" --repo "${{ github.repository }}" --pattern sha256sum.txt --output from.sha256
+          grep -E '  (ollama-linux-amd64-runtime\.tgz|ollama-linux-arm64-runtime\.tgz|ollama-windows-amd64-runtime\.zip)$' from.sha256 | sha256sum -c
+          gh release upload "${{ inputs.tag }}" --repo "${{ github.repository }}" ollama-linux-amd64-runtime.tgz ollama-linux-arm64-runtime.tgz ollama-windows-amd64-runtime.zip $CLOBBER
+
+  windows-runtime:
+    needs: prepare
+    if: inputs.only == 'all' && inputs.runtimes_from == ''
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: |
+          # CRLF checkouts break the patch step: git apply will not match an LF
+          # source with a CRLF patch, and llama/compat/*.patch are LF.
+          git -c core.autocrlf=false -c core.eol=lf clone --depth 1 \
+            --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: install the clang64 toolchain
+        shell: pwsh
+        run: |
+          # The shipped DLLs are MSYS2 clang64 builds -- libc++.dll and
+          # libunwind.dll in lib/ollama are the tell -- so match them rather
+          # than building against the MSVC runtime.
+          & C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed mingw-w64-clang-x86_64-clang
+          & C:\msys64\clang64\bin\clang.exe --version
+      - name: build the runtime
+        shell: pwsh
+        working-directory: repo
+        run: |
+          # Native CMake and its bundled ninja: MSYS2's cmake takes POSIX paths
+          # only, and its ninja links msys-2.0.dll.
+          $cmakeDir = 'C:\Program Files\CMake\bin'
+          $env:PATH = "$cmakeDir;C:\msys64\clang64\bin;$env:PATH"
+          $env:CC  = 'C:/msys64/clang64/bin/clang.exe'
+          $env:CXX = 'C:/msys64/clang64/bin/clang++.exe'
+          $env:CMAKE_GENERATOR = 'Ninja'
+          $dist = Join-Path $PWD 'dist'
+          # GGML_CCACHE defaults on and picks up MSYS2's ccache, which cannot
+          # resolve a Windows-path compiler and fails every compile.
+          & cmake -S llama/server --preset cpu_windows -DGGML_CCACHE=OFF --install-prefix $dist
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+          # prove the compat patches reached the fetched source before compiling
+          $rb = 'build/llama-server-cpu/_deps/llama_cpp-src/common/reasoning-budget.cpp'
+          foreach ($needle in @('WAITING_BOUNDARY', 'REASONING_BUDGET_SCOPE_RESPONSE', 'forced_end_pos')) {
+            if (-not (Select-String -Path $rb -Pattern $needle -Quiet)) { throw "compat patch did not bring $needle into $rb" }
+            Write-Output "patch applied: $needle present"
+          }
+
+          & cmake --build build/llama-server-cpu --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          & cmake --install build/llama-server-cpu --component llama-server --strip
+          if ($LASTEXITCODE -ne 0) { throw "install failed" }
+          Get-ChildItem dist/lib/ollama -File | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length/1MB) }
+      - name: package
+        shell: pwsh
+        working-directory: repo
+        run: |
+          Compress-Archive -Path dist/lib/ollama/* -DestinationPath ollama-windows-amd64-runtime.zip -Force
+          Get-Item ollama-windows-amd64-runtime.zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
+      - name: attach to the release
+        shell: bash
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" ollama-windows-amd64-runtime.zip $CLOBBER
+
+  # The same half, for Linux, and for the same reason: without it a tester on
+  # Linux has the binary asking for behaviour the runtime does not have, which
+  # is indistinguishable from the feature not working. Built inside AlmaLinux 8
+  # exactly as the binary is — a runner-native build links against glibc 2.39
+  # and refuses to load on anything older than 2.34, which is most of what
+  # people are actually running. Base runtime only: the patch lives in
+  # libllama-common, and ggml-cuda, ggml-vulkan and the ROCm backend reach it
+  # through ggml's C ABI, so an existing GPU install keeps working untouched.
+  linux-runtime:
+    needs: prepare
+    if: inputs.only == 'all' && inputs.runtimes_from == ''
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      - name: build the runtime
+        working-directory: repo
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash -euo pipefail -c '
+            # gcc-toolset-12, not the stock gcc 8.5: GGML_CPU_ALL_VARIANTS
+            # compiles the sapphirerapids variant with -mamx-tile, which no
+            # compiler before gcc 11 recognises ("unrecognized command-line
+            # option"). git is needed too — llama/compat applies its patches
+            # with `git apply`.
+            dnf install -y -q gcc-toolset-12 cmake git make tar gzip findutils > /dev/null
+            source /opt/rh/gcc-toolset-12/enable
+            # The presets ask for CMake 3.24. AlmaLinux 8 has carried 3.26
+            # since 8.9, but fetch rather than fail a release on a base-image
+            # change nobody here controls.
+            have=$(cmake --version | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+            if [ "$(printf "%s\n3.24\n" "$have" | sort -V | head -1)" != "3.24" ]; then
+              curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz -o /tmp/cmake.tgz
+              tar -C /usr/local --strip-components=1 -xzf /tmp/cmake.tgz
+            fi
+            cmake --version
+            cmake -S llama/server --preset cpu -DGGML_CCACHE=OFF --install-prefix /src/dist
+
+            # prove the compat patches reached the fetched source before compiling
+            rb=build/llama-server-cpu/_deps/llama_cpp-src/common/reasoning-budget.cpp
+            for needle in WAITING_BOUNDARY REASONING_BUDGET_SCOPE_RESPONSE forced_end_pos; do
+              grep -q "$needle" "$rb" || { echo "compat patch did not bring $needle into $rb"; exit 1; }
+              echo "patch applied: $needle present"
+            done
+
+            cmake --build build/llama-server-cpu --parallel "$(nproc)"
+            cmake --install build/llama-server-cpu --component llama-server --strip
+          '
+          # everything docker wrote is root-owned; the steps after this are not
+          sudo chown -R "$(id -u):$(id -g)" dist build
+          ls -la dist/lib/ollama
+          # prove the portability claim rather than assuming it
+          objdump -T dist/lib/ollama/libllama-common.so.* | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
+      - name: smoke test
+        working-directory: repo
+        run: ./dist/lib/ollama/llama-server --version || true
+      - name: package
+        working-directory: repo
+        run: |
+          # An `ollama/` directory at the archive root, so installing it is
+          # `tar -C /usr/local/lib -xzf` over the directory it already has.
+          tar -C dist/lib -czf ollama-linux-amd64-runtime.tgz ollama
+          ls -la ollama-linux-amd64-runtime.tgz
+      - name: attach to the release
+        working-directory: repo
+        run: gh release upload "${{ inputs.tag }}" ollama-linux-amd64-runtime.tgz $CLOBBER
+
+  # The tray app, which is the half that decides whether this install replaces
+  # itself. Stock `ollama app.exe` checks ollama.com, is offered the official
+  # release, and installs it -- replacing the binary that has the budget with
+  # one that does not. Measured on eleven2go 2026-09-10: offered from 09:10,
+  # installed at 12:12, and the server it left behind did not start at all. A
+  # tester who keeps the stock app keeps that behaviour no matter what binary
+  # they drop next to it, so the app is built here too.
+  #
+  # It is unsigned, so Windows SmartScreen will warn on first run. That is the
+  # cost of not shipping an installer, and the notes say so.
+  windows-app:
+    needs: prepare
+    if: inputs.only == 'all'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      # app/ui/app.go carries `//go:embed app/dist`, and embed fails the build
+      # outright when the directory does not exist -- "pattern app/dist: no
+      # matching files found". The React app has to be built before Go is run.
+      - name: build the web ui
+        working-directory: repo/app/ui/app
+        run: |
+          npm ci || npm install
+          npm run build
+          test -s dist/index.html
+          ls -la dist
+      # No `go generate ./...` here, deliberately. Its two directives in
+      # app/ui are the tscriptify run that writes app/codegen/gotypes.gen.ts --
+      # a file that is committed, and that the test workflow verifies is
+      # current on every push -- and the npm build the step above already did.
+      # Running it needs `go install tscriptify` first (it is not on the
+      # runner: "executable file not found in %PATH%") and would regenerate a
+      # file this job has no business rewriting.
+      # -H windowsgui: without it the tray app opens a console window behind
+      # itself on every launch.
+      - name: build
+        working-directory: repo
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -H windowsgui -extldflags=-static -X=github.com/ollama/ollama/app/version.Version=${{ inputs.version }}" \
+            -o "ollama app.exe" ./app/cmd/app/
+          ls -la "ollama app.exe"
+      - name: no third-party DLL imports
+        working-directory: repo
+        run: |
+          bad=0
+          for dll in libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll libgomp-1.dll; do
+            if grep -qa "$dll" "ollama app.exe"; then
+              echo "::error::ollama app.exe still references $dll; it will not load on a clean Windows install"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] && echo "no third-party DLL references found"
+          exit "$bad"
+      # The point of shipping this at all. If the built app still names
+      # ollama.com, it will still replace this install with a stock one, and
+      # the release is worse than useless -- it looks like protection.
+      - name: it asks the fork, not ollama.com
+        working-directory: repo
+        run: |
+          if grep -qa "ollama.com/api/update" "ollama app.exe"; then
+            echo "::error::ollama app.exe still points its update check at ollama.com"
+            exit 1
+          fi
+          grep -qa "repos/mann1x/ollama/releases" "ollama app.exe" \
+            || { echo "::error::ollama app.exe does not name the fork's releases endpoint"; exit 1; }
+          echo "update check points at the fork"
+      # Uploaded under a hyphenated name because GitHub rewrites spaces in
+      # asset names to dots: "ollama app.exe" arrives as "ollama.app.exe",
+      # which matches nothing the install expects and which a tester would
+      # have to guess at. Named explicitly here, and the notes say what to
+      # rename it to. The build above keeps the real name so the two guards
+      # read the file they are guarding.
+      - name: attach to the release
+        working-directory: repo
+        run: |
+          cp "ollama app.exe" ollama-app-windows-amd64.exe
+          gh release upload "${{ inputs.tag }}" ollama-app-windows-amd64.exe $CLOBBER
+
+  # Linux arm64: the binary and the CPU runtime, for a Raspberry Pi 5 class
+  # machine and for xollama's arm64 packages, which pin the runtime archive.
+  # Built natively on an arm64 runner, inside AlmaLinux 8 like the amd64 pair
+  # (glibc 2.28), with clang and gcc-toolset-13's libstdc++ as upstream's own
+  # arm64 CPU stage does (Dockerfile, base-arm64 + cpu-deps). The `cpu` preset
+  # builds every ggml CPU variant and picks one at load, so the baseline is
+  # plain armv8-a and nothing is tuned to the runner's CPU.
+  linux-arm64:
+    needs: prepare
+    # Not on `only: mlx-windows`: a rebuild would move the sha256 people pin.
+    if: inputs.only == 'all' || inputs.only == 'arm64'
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      - name: build the binary (inside almalinux 8)
+        working-directory: repo
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e VERSION \
+            -e CGO_ENABLED=1 -e CGO_LDFLAGS=-ldl -e GOTOOLCHAIN=auto \
+            almalinux:8 bash -euo pipefail -c '
+              # clang, as the upstream arm64 base has it: the mlx cgo headers
+              # include arm_bf16.h, which the stock gcc 8.5 does not ship
+              # ("fatal error: arm_bf16.h: No such file or directory").
+              dnf install -y -q clang gcc gcc-c++ tar gzip findutils > /dev/null
+              export CC=clang CXX=clang++
+              ver=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+              curl -fsSL "https://go.dev/dl/${ver}.linux-arm64.tar.gz" -o /tmp/go.tar.gz
+              tar -C /usr/local -xzf /tmp/go.tar.gz
+              export PATH=/usr/local/go/bin:$PATH
+              go version
+              go build -trimpath \
+                -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$VERSION -X=github.com/ollama/ollama/server.mode=release" \
+                -o ollama-linux-arm64 .
+            '
+          sudo chown "$(id -u):$(id -g)" ollama-linux-arm64
+          ls -la ollama-linux-arm64
+          file ollama-linux-arm64
+          objdump -T ollama-linux-arm64 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
+      - name: build the runtime (inside almalinux 8)
+        if: inputs.runtimes_from == ''
+        working-directory: repo
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash -euo pipefail -c '
+            dnf install -y -q clang gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ cmake git make tar gzip findutils > /dev/null
+            export PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
+            export CC=clang CXX=clang++
+            have=$(cmake --version | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1)
+            if [ "$(printf "%s\n3.24\n" "$have" | sort -V | head -1)" != "3.24" ]; then
+              curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-aarch64.tar.gz -o /tmp/cmake.tgz
+              tar -C /usr/local --strip-components=1 -xzf /tmp/cmake.tgz
+            fi
+            cmake --version
+            cmake -S llama/server --preset cpu -DGGML_CCACHE=OFF --install-prefix /src/dist
+
+            # prove the compat patches reached the fetched source before compiling
+            rb=build/llama-server-cpu/_deps/llama_cpp-src/common/reasoning-budget.cpp
+            for needle in WAITING_BOUNDARY REASONING_BUDGET_SCOPE_RESPONSE forced_end_pos; do
+              grep -q "$needle" "$rb" || { echo "compat patch did not bring $needle into $rb"; exit 1; }
+              echo "patch applied: $needle present"
+            done
+
+            cmake --build build/llama-server-cpu --parallel "$(nproc)"
+            cmake --install build/llama-server-cpu --component llama-server --strip
+            # the OpenMP runtime the build linked, as upstream ships it beside the server
+            for lib in /usr/lib64/libgomp.so* /usr/lib64/libomp.so* \
+                /opt/rh/gcc-toolset-13/root/usr/lib64/libgomp.so* \
+                /opt/rh/gcc-toolset-13/root/usr/lib64/libomp.so*; do
+              [ -e "$lib" ] && cp -a "$lib" dist/lib/ollama/ || true
+            done
+          '
+          sudo chown -R "$(id -u):$(id -g)" dist build
+          ls -la dist/lib/ollama
+          file dist/lib/ollama/llama-server
+          objdump -T dist/lib/ollama/libllama-common.so.* | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
+          # A Pi 5 kernel uses 16K pages: a segment aligned to less does not load there.
+          readelf -lW dist/lib/ollama/llama-server | awk '$1=="LOAD"{print "LOAD align", $NF}'
+      - name: smoke test
+        working-directory: repo
+        run: |
+          ./ollama-linux-arm64 --version || true
+          [ -n "$RUNTIMES_FROM" ] || ./dist/lib/ollama/llama-server --version
+      - name: package
+        if: inputs.runtimes_from == ''
+        working-directory: repo
+        run: |
+          tar -C dist/lib -czf ollama-linux-arm64-runtime.tgz ollama
+          ls -la ollama-linux-arm64-runtime.tgz
+      - name: attach to the release
+        working-directory: repo
+        run: |
+          bin="ollama-linux-arm64${SUFFIX}"
+          rt="ollama-linux-arm64-runtime${SUFFIX}.tgz"
+          [ "$bin" = ollama-linux-arm64 ] || cp ollama-linux-arm64 "$bin"
+          if [ -n "$RUNTIMES_FROM" ]; then
+            # the runtime comes from reuse-runtimes; only the binary is built here
+            sha256sum "$bin"
+            gh release upload "${{ inputs.tag }}" "$bin" $CLOBBER
+            exit 0
+          fi
+          [ "$rt" = ollama-linux-arm64-runtime.tgz ] || cp ollama-linux-arm64-runtime.tgz "$rt"
+          sha256sum "$bin" "$rt"
+          gh release upload "${{ inputs.tag }}" "$bin" "$rt" $CLOBBER
+
+  # Upstream's Windows MLX runtime, built here so it loads on a machine that
+  # does not have the CUDA toolkit and cuDNN installed where upstream's build
+  # machine had them.
+  #
+  # mlx.dll finds cuDNN, cuBLAS and NVRTC through two folders fixed at build
+  # time, MLX_CUDNN_BIN_DIR and MLX_CUDA_BIN_DIR (mlx/backend/cuda/dirs.cpp).
+  # Left unset, MLX's CMake fills in the build machine's own folders, and
+  # upstream's zip carries "C:/Program Files/NVIDIA/CUDNN/bin/x64": on any
+  # machine without cuDNN there, the first generation that touches cuDNN
+  # panics in load_cudnn()'s directory_iterator, and the request never
+  # answers (measured on eleven2go, qwen3.5:0.8b --runner mlx). The DLLs are
+  # in the zip all along, next to mlx.dll. A relative folder resolves from
+  # mlx.dll's own, so both are set to ".". The superbuild forwards every MLX_*
+  # cache variable to the MLX build, so upstream's CMake is used unchanged.
+  windows-mlx:
+    needs: prepare
+    # Its own dispatch (only: mlx-windows, asset_suffix: -reldir), never part of
+    # `all`: a full release republishes upstream's ollama-windows-amd64-mlx.zip
+    # under that name (scripts/thinkbudget-mlx-assets.sh), and this build next
+    # to it, so the two never share a name.
+    if: inputs.only == 'mlx-windows'
+    # windows-latest no longer carries VS 2022, and nvcc 13.0 takes no newer MSVC.
+    runs-on: windows-2022
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CUDA_INSTALLER: https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_windows.exe
+      CUDNN_ARCHIVE: https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.18.1.3_cuda13-archive.zip
+    steps:
+      # nvcc compiling MLX's kernels for every architecture runs past 16 GB.
+      - name: pagefile
+        uses: al-cheb/configure-pagefile-action@v1.5
+        with:
+          minimum-size: 16GB
+          maximum-size: 64GB
+          disk-root: "D:"
+      - name: clone
+        shell: bash
+        run: |
+          git -c core.autocrlf=false -c core.eol=lf clone --depth 1 \
+            --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
+      - name: install CUDA 13.0
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri $env:CUDA_INSTALLER -OutFile cuda.exe
+          # upstream's component list for its MLX CUDA 13 build
+          $parts = @('cudart','nvcc','cublas','cublas_dev','cufft','cufft_dev','nvrtc','nvrtc_dev',
+                     'cusolver','cusolver_dev','cusparse','cusparse_dev','nvjitlink','crt','nvvm','nvptxcompiler') |
+                   ForEach-Object { "${_}_13.0" }
+          Start-Process -FilePath .\cuda.exe -ArgumentList (@('-s') + $parts) -NoNewWindow -Wait
+          $cuda = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0'
+          if (-not (Test-Path "$cuda\bin\nvcc.exe")) { throw "CUDA 13.0 did not install" }
+          & "$cuda\bin\nvcc.exe" --version
+      - name: unpack cuDNN 9.18
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri $env:CUDNN_ARCHIVE -OutFile cudnn.zip
+          Expand-Archive -Path cudnn.zip -DestinationPath cudnn-extracted
+          # Not "C:\Program Files\NVIDIA\CUDNN", where upstream's is: a folder
+          # that exists on no user's machine, so anything that still points
+          # at the build machine's cuDNN fails here as it would there.
+          $root = Join-Path $env:RUNNER_TEMP 'cudnn'
+          Move-Item (Get-ChildItem cudnn-extracted -Directory)[0].FullName $root
+          "CUDNN_ROOT_DIR=$root"              | Out-File $env:GITHUB_ENV -Append
+          "CUDNN_INCLUDE_PATH=$root\include"  | Out-File $env:GITHUB_ENV -Append
+          "CUDNN_LIBRARY_PATH=$root\lib\x64"  | Out-File $env:GITHUB_ENV -Append
+          Get-ChildItem "$root\bin\x64" -Filter *.dll | ForEach-Object Name
+      - name: build
+        working-directory: repo
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version '[17.0,18.0)' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio 2022 with the C++ tools on this runner" }
+          Write-Host "Visual Studio: $vs"
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -no_logo'
+          $cuda = 'C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.0'
+          $env:CUDA_PATH = $cuda
+          $env:CUDAToolkit_ROOT = $cuda
+          $env:CUDACXX = "$cuda/bin/nvcc.exe"
+          $env:CMAKE_GENERATOR = 'Ninja'
+          $dist = (Join-Path $PWD 'dist\windows-amd64') -replace '\\','/'
+          # upstream's mlxCuda13 configure (scripts/build_windows.ps1), plus the two folders
+          & cmake -S . -B build\mlx_cuda_v13 -DOLLAMA_MLX_BACKENDS=cuda_v13 `
+            "-DCUDAToolkit_ROOT:PATH=$cuda" "-DCMAKE_CUDA_COMPILER:FILEPATH=$cuda/bin/nvcc.exe" `
+            "-DCMAKE_CUDA_FLAGS=-t 2" `
+            '-DMLX_CUDA_BIN_DIR=.' '-DMLX_CUDNN_BIN_DIR=.' `
+            "-DOLLAMA_PAYLOAD_INSTALL_PREFIX=$dist" --install-prefix $dist
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+          & cmake --build build\mlx_cuda_v13 --target ollama-mlx-cuda_v13 --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+      - name: check the folders mlx.dll looks in
+        working-directory: repo
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # the setting reached MLX's own configure
+          $caches = Get-ChildItem build -Recurse -Filter CMakeCache.txt |
+                    Where-Object { Select-String -Path $_.FullName -Pattern '^MLX_CUDNN_BIN_DIR' -Quiet }
+          if (-not $caches) { throw "no MLX configure carries MLX_CUDNN_BIN_DIR" }
+          foreach ($cache in $caches) {
+            foreach ($name in 'MLX_CUDNN_BIN_DIR','MLX_CUDA_BIN_DIR') {
+              $line = Select-String -Path $cache.FullName -Pattern "^${name}:" | Select-Object -First 1
+              "$($cache.FullName): $line"
+              if ("$line" -notmatch '=\.$') { throw "$name is not '.' in $($cache.FullName)" }
+            }
+          }
+          # and no build-machine folder is left in the DLL
+          $dll = Get-ChildItem dist -Recurse -Filter mlx.dll | Select-Object -First 1
+          if (-not $dll) { throw "no mlx.dll in dist" }
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($dll.FullName))
+          foreach ($baked in 'NVIDIA/CUDNN/bin', 'CUDA/v13.0/bin/x64') {
+            if ($text.Contains($baked)) { throw "mlx.dll still names $baked" }
+            "mlx.dll does not name $baked"
+          }
+          # every DLL MLX loads by folder is next to it
+          $dir = $dll.Directory.FullName
+          foreach ($want in 'cudnn_graph64_9.dll','cudnn64_9.dll','cublas64_13.dll','cublasLt64_13.dll','nvrtc64_130_0.dll','cusolver64_12.dll') {
+            if (-not (Test-Path (Join-Path $dir $want))) { throw "$want is not next to mlx.dll" }
+          }
+          Get-ChildItem $dir -File | ForEach-Object { "{0,10:N1} MB  {1}" -f ($_.Length/1MB), $_.Name }
+      - name: package
+        working-directory: repo/dist
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # upstream's layout and zipper (scripts/build_windows.ps1): a
+          # windows-amd64-mlx folder holding README_MLX.txt and lib/ollama/mlx_*,
+          # zipped by 7z. tar.exe could not visit the deepest include folders.
+          $stage = Join-Path $PWD 'windows-amd64-mlx'
+          New-Item -ItemType Directory -Force (Join-Path $stage 'lib\ollama') | Out-Null
+          'Extract this MLX zip file to the same location where you extracted ollama-windows-amd64.zip' |
+            Set-Content -NoNewline -Encoding ascii (Join-Path $stage 'README_MLX.txt')
+          Get-ChildItem windows-amd64\lib\ollama -Directory -Filter 'mlx_*' |
+            Move-Item -Destination (Join-Path $stage 'lib\ollama')
+          $zip = Join-Path (Split-Path $PWD) 'ollama-windows-amd64-mlx.zip'
+          & 7z a -tzip -mx=7 -mmt=on $zip "$stage\*" | Select-Object -Last 3
+          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+          # every file staged is in the zip, and mlx.dll where ollama looks for it
+          $staged = (Get-ChildItem $stage -Recurse -File).Count
+          $listed = & 7z l -slt $zip | Select-String '^Path = '
+          $zipped = (& 7z l -ba $zip | Where-Object { $_ -notmatch ' D\.\.\.\. ' }).Count
+          "staged $staged files, zip lists $zipped"
+          if ($zipped -ne $staged) { throw "the zip holds $zipped files of $staged" }
+          if (-not ($listed | Where-Object { $_.Line -match 'lib\\ollama\\mlx_cuda_v13\\mlx\.dll$' })) { throw "no lib/ollama/mlx_cuda_v13/mlx.dll in the zip" }
+          Get-Item $zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+      # The build takes hours; a packaging fault must not cost another one.
+      - name: keep the build if packaging failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64-mlx
+          path: |
+            repo/dist/windows-amd64-mlx
+            repo/dist/windows-amd64/lib/ollama/mlx_*
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: ignore
+      - name: attach to the release
+        shell: bash
+        working-directory: repo
+        run: |
+          zip="ollama-windows-amd64-mlx${SUFFIX}.zip"
+          [ "$zip" = ollama-windows-amd64-mlx.zip ] || cp ollama-windows-amd64-mlx.zip "$zip"
+          sha256sum "$zip"
+          gh release upload "${{ inputs.tag }}" "$zip" $CLOBBER
+
+  checksums:
+    needs: [build, reuse-runtimes, windows-runtime, linux-runtime, linux-arm64, windows-app, windows-mlx]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      - name: sha256
+        working-directory: repo
+        run: |
+          mkdir -p dist && cd dist
+          # 'ollama*', not 'ollama-*': the tray app is "ollama app.exe", with a
+          # space and no hyphen, and a hyphenated glob leaves it unchecksummed.
+          gh release download "${{ inputs.tag }}" --pattern 'ollama*' --clobber
+          sha256sum ollama* > sha256sum.txt
+          cat sha256sum.txt
+          gh release upload "${{ inputs.tag }}" sha256sum.txt --clobber
