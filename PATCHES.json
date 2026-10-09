@@ -16,42 +16,42 @@
     "sha": "21263f95",
     "note": "the think-budget commit whose tree this patch set describes: 21263f95, the merge of tag v0.40.2 (b061384d) into thinkbudget-0.40.2 (1ae1fc80) plus one workflow commit (runtimes_from). Upstream v0.40.1..v0.40.2 is 6 commits and 5 files (README.md, cmd/launch/claude.go and its test, server/model_list.go, server/routes_list_test.go), none of them a patch-set file. LLAMA_CPP_VERSION (b11351), llama/server, llama/compat, llama/clef, MLX_VERSION (a59cc231), MLX_C_VERSION and mlx/ are unchanged, so the inputs digest (release.inputs_digest_definition) stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. Its tree is the apply-order replay from v0.40.2 (r402/replay 6709a5ad) plus this branch's own 16 files only; upstream changed none of them.",
     "release": {
-      "tag": "v0.40.1-thinkbudget",
-      "sha": "d0508358",
+      "tag": "v0.40.2-thinkbudget",
+      "sha": "de5f02e2",
       "inputs_digest": "d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76",
       "inputs_digest_definition": "git ls-tree -r <rev> -- LLAMA_CPP_VERSION llama/server llama/compat llama/clef | grep -v '[[:space:]]llama/compat/README\\.md$' | sha256sum (from v0.40.1 on, xollama mails 888/889; before, without llama/clef: 9defcc4413930651433008f477efa9c7e54ab33bb6618f7eb032cbe8a8e66df2 here, unchanged from v0.40.0 although llama/clef/clef.cpp changed)",
       "assets": {
         "ollama-linux-amd64-runtime.tgz": "35b4194a8e6475e3bc31eb142033fdc6d2985d23dd6e350d97c9725c92091241",
-        "ollama-linux-amd64": "b3947d1063368dc884e2bd311763c496782826b9735a926441a35df76c3126ba"
+        "ollama-linux-amd64": "716ad5ac458a529108237faaf58bc8a48e7a31ee020d258a5ea4e8f44b735d15"
       },
-      "note": "carries all 24 patches at this manifest's shas on v0.40.1 / llama.cpp b11351; built 2026-10-08 by run 37735483360 (all jobs green: prepare, three binaries, linux-runtime, linux-arm64, windows-runtime, windows-app, checksums; windows-mlx runs on its own dispatch). d0508358 is fdfa954d plus a release-notes commit and the manifest commit only. Checked after download: sha256sum -c OK for the binary and both Linux runtimes, the binary reports 0.40.1-thinkbudget with a glibc floor of 2.28; the runtime build logged the 004/005 markers (WAITING_BOUNDARY, REASONING_BUDGET_SCOPE_RESPONSE, forced_end_pos) in the fetched source, and libllama-common exports common_reasoning_budget_is_line_boundary and the scope type. Cut as part of the v0.40.1 sync (FORK-SYNC R6). Previous: v0.40.0-thinkbudget (2630dba7).",
+      "runtimes_from": "v0.40.1-thinkbudget",
+      "note": "carries all 24 patches at this manifest's shas on v0.40.2 / llama.cpp b11351; built 2026-10-09 by run 37900936476 (prepare, reuse-runtimes, three binaries, linux-arm64, windows-app, checksums green; linux-runtime, windows-runtime and windows-mlx skipped by design). de5f02e2 is 21263f95 plus a release-notes commit and the manifest commit only. NO RUNTIME WAS REBUILT (owner, 2026-10-09: no rebuilds unless strictly needed): the three llama runtimes are v0.40.1-thinkbudget's files, byte for byte, put here by the workflow's reuse-runtimes job (input runtimes_from), which checked that the inputs digest is the same at de5f02e2 and at d0508358 (d0cc3cdd) and that the files match that release's sha256sum.txt. So ollama-linux-amd64-runtime.tgz 35b4194a, ollama-linux-arm64-runtime.tgz ec966032 and ollama-windows-amd64-runtime.zip 7c968188 are unchanged and a pin moves only its tag. Checked after download: sha256sum -c OK for the binary and both Linux runtimes, the amd64 runtime cmp-identical to v0.40.1's, the binary reports 0.40.2-thinkbudget with a glibc floor of 2.28. sha256sum.txt was regenerated from the release's asset digests after the MLX uploads. Cut as part of the v0.40.2 sync (FORK-SYNC R6). Previous: v0.40.1-thinkbudget (d0508358).",
       "arm64": {
         "assets": {
           "ollama-linux-arm64-runtime.tgz": "ec9660328ba5adccc20655638cf65a34c0dfc62a6db93d09980ec1ff50b61745",
-          "ollama-linux-arm64": "54534fde937ece64b12e2a587a0ae7b1d9d531d83451c4a1b71127749fa916f0"
+          "ollama-linux-arm64": "ea5d6c67ab22f14e37fd1c7ba1b3e6cc210645908c6363fdf4aa581fb31f8d55"
         },
         "built": "d0508358705978533c6ddc7fb24f23556a659f8e",
-        "note": "built in the same run (37735483360, job linux-arm64) from the same commit as the amd64 runtime, so the same inputs digest. sha256sum -c OK after download; not run on arm64 hardware in this sync."
+        "note": "the runtime is v0.40.1-thinkbudget's file (built at d0508358, run 37735483360), reused unchanged; the binary was built at de5f02e2 in run 37900936476. Not run on arm64 hardware in this sync."
       },
       "mlx": {
-        "upstream": "v0.40.1",
+        "upstream": "v0.40.2",
         "MLX_VERSION": "a59cc23190f1e26fabcba8693607bb4c34b2ac2b",
         "MLX_C_VERSION": "ebc88f10caa1b625e6b581437a8dea6df8a70085",
         "assets": {
-          "ollama-linux-amd64-mlx.tar.zst": "69d39f4bb0e0fde9cdd14790630e971c201d75e96191c85483a505fe95425858",
-          "ollama-windows-amd64-mlx.zip": "b11f94f8185666e40e6360c446545b938c50d92c8fdc3f87c7c1dbbbb5ba9fc8",
-          "ollama-darwin-mlx.tgz": "9b633135fac850a38886f07c0dde45dcd0261b23539a2948854d9eb34748fd53"
+          "ollama-linux-amd64-mlx.tar.zst": "74d4583c14d24da5e6240674c50b0fdcab369645ca04876f000fff8d4f6a4d66",
+          "ollama-windows-amd64-mlx.zip": "fe187f88681bc5d3c196d91674f460e73fe22bbf5d329eccf80dd0f0222ac990",
+          "ollama-darwin-mlx.tgz": "171d8c134ee425ed41a08f88914b720ac2124ae86a8e1ab52c0b8da2900484f4"
         },
         "darwin_source": {
-          "ollama-darwin.tgz": "66e1587711f3a06315b23782ba74897001da6c8b8edf6c0371f7533015a076dd"
+          "ollama-darwin.tgz": "e888b7637291ceb80b622c00ea067f62c86d9c50d419b3eb903032e4f1f8a4f6"
         },
         "reldir": {
           "asset": "ollama-windows-amd64-mlx-reldir.zip",
-          "run": "37737304380",
           "sha256": "31c743bded2e27639cf721bd41361e38beb478e4c7fb6c141518fb0164f89206",
-          "note": "the fork's build of this MLX (a59cc231, per the build log) with MLX_CUDA_BIN_DIR and MLX_CUDNN_BIN_DIR set to '.', run 37737304380 (only=mlx-windows, asset_suffix=-reldir), 1,403,095,074 bytes, uploaded 2026-10-08. Against upstream's ollama-windows-amd64-mlx.zip (b11f94f8): the same 2,642 files at the same paths; mlx.dll names no absolute CUDA or cuDNN folder (upstream's names C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.0/bin/x64 and C:/Program Files/NVIDIA/CUDNN/bin/x64); the NVIDIA DLLs are the same versions (cuDNN 9.18.1.3, CUDA 13.0 libraries); our own DLLs carry no Ollama signature; README_MLX.txt lacks upstream's trailing CRLF. Not run here; xollama checks it on eleven2go without cuDNN before pinning."
+          "note": "NOT rebuilt: the file from v0.40.1-thinkbudget (run 37737304380), copied here unchanged. MLX_VERSION, MLX_C_VERSION and mlx/ are unchanged at v0.40.2, and xollama checked exactly these bytes on eleven2go without cuDNN (mail 898)."
         },
-        "note": "uploaded 2026-10-08 by scripts/thinkbudget-mlx-assets.sh v0.40.1 --upload, after the release existed. The Linux and Windows archives are upstream's files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from (mlx_metal_v3 universal, mlx_metal_v4 arm64, seven licence texts). mlx-runtime.txt sha256 eb05e0a2acbd4dd659db52212b99f26d420a7db2704f537881a11634222691f2. MLX_VERSION moved from 264c14fe (v0.40.0); MLX_C_VERSION is unchanged."
+        "note": "uploaded 2026-10-09 by scripts/thinkbudget-mlx-assets.sh v0.40.2 --upload, after the release existed. The Linux and Windows archives are upstream's v0.40.2 files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from. Upstream rebuilt them for v0.40.2, so their bytes differ from v0.40.1's although MLX_VERSION is the same. mlx-runtime.txt sha256 d082a2d082f804be02f3e3c88880b2cc61ec29fd97810e7eca753ebd8fa2e4a1."
       }
     }
   },
