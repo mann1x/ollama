@@ -44,6 +44,10 @@ on:
         description: "added to the names of the assets this run uploads (before the extension), e.g. -2630dba7: a rebuild goes beside the assets people pin, not over them"
         type: string
         default: ""
+      runtimes_from:
+        description: "a fork release tag (e.g. v0.40.1-thinkbudget) whose llama runtimes are put on this release unchanged instead of being rebuilt. Refused unless the llama inputs digest is the same at both commits. Empty: build them"
+        type: string
+        default: ""
       replace:
         description: "replace an asset of the same name that is already on the release. Off, an upload of a name that exists fails: people pin these by sha256"
         type: boolean
@@ -56,6 +60,7 @@ env:
   GH_TOKEN: ${{ github.token }}
   GOTOOLCHAIN: auto
   SUFFIX: ${{ inputs.asset_suffix }}
+  RUNTIMES_FROM: ${{ inputs.runtimes_from }}
   # Replace an existing asset only when asked: a release asset xollama pins
   # is never re-uploaded with different bytes.
   CLOBBER: ${{ inputs.replace && '--clobber' || '' }}
@@ -204,9 +209,44 @@ jobs:
   # The half that carries the sampler. Only the base runtime is built: the patch
   # lives in libllama-common, and ggml-cuda talks to it through ggml's C ABI, so
   # a tester keeps the CUDA backend their install already has.
+  # No rebuild unless it is needed: when nothing the runtime is compiled from
+  # changed since an earlier fork release, that release's runtimes go on this
+  # one byte for byte, and whoever pins them by sha256 moves only the tag.
+  # "Nothing changed" is the inputs digest xollama checks (FORK-SYNC R6):
+  # LLAMA_CPP_VERSION, llama/server, llama/compat and llama/clef, the
+  # llama/compat/README.md line left out.
+  reuse-runtimes:
+    needs: prepare
+    if: inputs.only == 'all' && inputs.runtimes_from != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone
+        run: git clone --depth 1 --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo && git -C repo log -1 --format="building %H (%s)"
+      - name: the inputs are the ones those runtimes were built from
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          from=$(gh release view "$RUNTIMES_FROM" --repo "${{ github.repository }}" --json targetCommitish -q .targetCommitish)
+          git fetch -q --depth 1 origin "$from"
+          digest() { git ls-tree -r "$1" -- LLAMA_CPP_VERSION llama/server llama/compat llama/clef | grep -v '[[:space:]]llama/compat/README\.md$' | sha256sum | cut -d' ' -f1; }
+          here=$(digest HEAD); there=$(digest FETCH_HEAD)
+          echo "inputs at $(git rev-parse HEAD): $here"
+          echo "inputs at $from ($RUNTIMES_FROM): $there"
+          [ "$here" = "$there" ] || { echo "the llama inputs changed since $RUNTIMES_FROM: build the runtimes (leave runtimes_from empty)"; exit 1; }
+      - name: put them on this release, unchanged
+        run: |
+          set -euo pipefail
+          mkdir rt && cd rt
+          for a in ollama-linux-amd64-runtime.tgz ollama-linux-arm64-runtime.tgz ollama-windows-amd64-runtime.zip; do
+            gh release download "$RUNTIMES_FROM" --repo "${{ github.repository }}" --pattern "$a"
+          done
+          gh release download "$RUNTIMES_FROM" --repo "${{ github.repository }}" --pattern sha256sum.txt --output from.sha256
+          grep -E '  (ollama-linux-amd64-runtime\.tgz|ollama-linux-arm64-runtime\.tgz|ollama-windows-amd64-runtime\.zip)$' from.sha256 | sha256sum -c
+          gh release upload "${{ inputs.tag }}" --repo "${{ github.repository }}" ollama-linux-amd64-runtime.tgz ollama-linux-arm64-runtime.tgz ollama-windows-amd64-runtime.zip $CLOBBER
+
   windows-runtime:
     needs: prepare
-    if: inputs.only == 'all'
+    if: inputs.only == 'all' && inputs.runtimes_from == ''
     runs-on: windows-latest
     defaults:
       run:
@@ -276,7 +316,7 @@ jobs:
   # through ggml's C ABI, so an existing GPU install keeps working untouched.
   linux-runtime:
     needs: prepare
-    if: inputs.only == 'all'
+    if: inputs.only == 'all' && inputs.runtimes_from == ''
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -465,6 +505,7 @@ jobs:
           file ollama-linux-arm64
           objdump -T ollama-linux-arm64 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -3 || true
       - name: build the runtime (inside almalinux 8)
+        if: inputs.runtimes_from == ''
         working-directory: repo
         run: |
           docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash -euo pipefail -c '
@@ -505,8 +546,9 @@ jobs:
         working-directory: repo
         run: |
           ./ollama-linux-arm64 --version || true
-          ./dist/lib/ollama/llama-server --version
+          [ -n "$RUNTIMES_FROM" ] || ./dist/lib/ollama/llama-server --version
       - name: package
+        if: inputs.runtimes_from == ''
         working-directory: repo
         run: |
           tar -C dist/lib -czf ollama-linux-arm64-runtime.tgz ollama
@@ -517,6 +559,12 @@ jobs:
           bin="ollama-linux-arm64${SUFFIX}"
           rt="ollama-linux-arm64-runtime${SUFFIX}.tgz"
           [ "$bin" = ollama-linux-arm64 ] || cp ollama-linux-arm64 "$bin"
+          if [ -n "$RUNTIMES_FROM" ]; then
+            # the runtime comes from reuse-runtimes; only the binary is built here
+            sha256sum "$bin"
+            gh release upload "${{ inputs.tag }}" "$bin" $CLOBBER
+            exit 0
+          fi
           [ "$rt" = ollama-linux-arm64-runtime.tgz ] || cp ollama-linux-arm64-runtime.tgz "$rt"
           sha256sum "$bin" "$rt"
           gh release upload "${{ inputs.tag }}" "$bin" "$rt" $CLOBBER
@@ -692,7 +740,7 @@ jobs:
           gh release upload "${{ inputs.tag }}" "$zip" $CLOBBER
 
   checksums:
-    needs: [build, windows-runtime, linux-runtime, linux-arm64, windows-app, windows-mlx]
+    needs: [build, reuse-runtimes, windows-runtime, linux-runtime, linux-arm64, windows-app, windows-mlx]
     if: always()
     runs-on: ubuntu-latest
     steps:
