@@ -1425,6 +1425,24 @@ type llamaServerCompletionRequest struct {
 	NProbs          int             `json:"n_probs,omitempty"`
 	PreservedTokens []string        `json:"preserved_tokens,omitempty"`
 	TimingsPerToken bool            `json:"timings_per_token,omitempty"`
+
+	// Reasoning budget sampler. llama-server activates it once it sees
+	// ReasoningBudgetStartTag generated (or present in GenerationPrompt), then
+	// forces ReasoningBudgetEndTag after ReasoningBudgetTokens tokens.
+	ReasoningBudgetTokens   int    `json:"reasoning_budget_tokens,omitempty"`
+	ReasoningBudgetStartTag string `json:"reasoning_budget_start_tag,omitempty"`
+	ReasoningBudgetEndTag   string `json:"reasoning_budget_end_tag,omitempty"`
+	// ReasoningBudgetMessage must be sent even when empty: llama-server builds
+	// the sequence it forces from message+end_tag, and only does so when this
+	// field is present. A pointer keeps the empty string on the wire.
+	ReasoningBudgetMessage *string `json:"reasoning_budget_message,omitempty"`
+	// ReasoningBudgetScope spends the budget across the whole response
+	// ("response") rather than re-arming it for every thinking block
+	// ("block", llama-server's default). ReasoningBudgetResetTag forgives what
+	// has been spent when it appears -- a tool call means progress, not a loop.
+	ReasoningBudgetScope    string `json:"reasoning_budget_scope,omitempty"`
+	ReasoningBudgetResetTag string `json:"reasoning_budget_reset_tag,omitempty"`
+	GenerationPrompt        string `json:"generation_prompt,omitempty"`
 }
 
 // schemaGrammars caches the grammars llama-server derives from JSON schemas,
@@ -1548,6 +1566,41 @@ func leadingSpecialTokenCandidate(tag string) string {
 	}
 
 	return tag[:end+1]
+}
+
+// maxThinkingGenerationPrompt bounds how much of the prompt is replayed into
+// the budget sampler. Every renderer that primes thinking does so with the
+// opening tag and at most a channel name, so a longer run means the tag came
+// from message content rather than the template: replaying that would activate
+// the budget against text the model never generated.
+const maxThinkingGenerationPrompt = 64
+
+// thinkingGenerationPrompt returns the part of the prompt that already sits
+// inside an unclosed thinking block, for llama-server to replay into the
+// reasoning-budget sampler before decoding.
+//
+// The sampler leaves its idle state only when the opening tag passes through
+// it, so a template that primes thinking — by ending the prompt with the tag,
+// or with the tag plus a channel name, as gemma4 does after a tool response —
+// otherwise leaves the budget silently inert for the whole turn. Matching the
+// unclosed opening rather than the exact suffix keeps that from depending on
+// how much a renderer writes after the tag.
+func thinkingGenerationPrompt(prompt, startTag, endTag string) string {
+	if startTag == "" || endTag == "" {
+		return ""
+	}
+
+	start := strings.LastIndex(prompt, startTag)
+	if start == -1 {
+		return ""
+	}
+
+	tail := prompt[start:]
+	if strings.Contains(tail[len(startTag):], endTag) || len(tail) > maxThinkingGenerationPrompt {
+		return ""
+	}
+
+	return tail
 }
 
 // llamaServerMultimodalPrompt is used when images are present.
@@ -1675,6 +1728,36 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 		lsReq.NProbs = max(req.TopLogprobs, 1)
 	}
 
+	// Cap thinking. llama-server's reasoning budget sampler needs both
+	// delimiters: it starts counting at the opening tag and forces the closing
+	// tag once the budget runs out.
+	if req.ThinkBudget > 0 && req.ThinkingStartTag != "" && req.ThinkingEndTag != "" {
+		lsReq.ReasoningBudgetTokens = req.ThinkBudget
+		lsReq.ReasoningBudgetStartTag = req.ThinkingStartTag
+		lsReq.ReasoningBudgetEndTag = req.ThinkingEndTag
+		// Sent even when empty. llama-server builds the sequence it forces
+		// from message+end_tag, and on the pinned runtime it builds it in this
+		// field's handler, so an absent field is a handler that never runs:
+		// the budget expires with nothing to force, the sampler logs its usual
+		// states, and the thinking block is left open.
+		lsReq.ReasoningBudgetMessage = &req.ThinkBudgetMessage
+
+		// Bound the response, not the block. Measured live on gemma4: six
+		// consecutive thinking blocks, each closed by the model just short of
+		// its 8,000-token window and each re-armed in full, consumed a 32,000
+		// token output cap without the budget ever expiring -- so the message
+		// that tells the model to wrap up was never injected and the turn
+		// ended with neither an answer nor a tool call.
+		lsReq.ReasoningBudgetScope = "response"
+		lsReq.ReasoningBudgetResetTag = req.ThinkBudgetResetTag
+
+		// The sampler only sees tokens the model generates, so a template that
+		// primes thinking by ending the prompt inside a thinking block would
+		// never activate it. Hand that opening over as the generation prompt
+		// instead: llama-server replays it into the sampler before decoding.
+		lsReq.GenerationPrompt = thinkingGenerationPrompt(req.Prompt, req.ThinkingStartTag, req.ThinkingEndTag)
+	}
+
 	// Handle format: pass JSON schema directly to llama-server, or use grammar
 	if len(req.Format) > 0 {
 		switch string(req.Format) {
@@ -1767,8 +1850,8 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 	buf := make([]byte, 0, llamaServerStreamInitialBufferSize)
 	scanner.Buffer(buf, llamaServerStreamMaxBufferSize)
 
-	var lastToken string
-	var tokenRepeat int
+	var repeat repeatGuard
+	var evalCount int
 	var finalResp CompletionResponse
 	var hasFinalResp bool
 
@@ -1795,17 +1878,26 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 				return fmt.Errorf("error unmarshalling llama-server response: %v", err)
 			}
 
-			// Token repeat detection
-			switch {
-			case strings.TrimSpace(lsResp.Content) == lastToken:
-				tokenRepeat++
-			default:
-				lastToken = strings.TrimSpace(lsResp.Content)
-				tokenRepeat = 0
+			if lsResp.Content != "" {
+				evalCount++
 			}
-			if tokenRepeat > 100 {
-				slog.Debug("prediction aborted, token repeat limit reached")
-				return fmt.Errorf("prediction aborted, token repeat limit reached")
+
+			// A generation that has come apart repeats one short unit until
+			// something stops it. Cut it off, and say so: the response is
+			// already partly streamed, so it ends as a normal completion with
+			// a reason the caller can act on.
+			if repeat.observe(lsResp.Content) {
+				slog.Warn("stopping generation, output repeated the same sequence past the limit",
+					"period", repeat.period(), "bytes", repeatGuardBudgetBytes)
+				if err := res.Body.Close(); err != nil {
+					return fmt.Errorf("error closing llama-server response: %v", err)
+				}
+				fn(CompletionResponse{
+					Done:       true,
+					DoneReason: DoneReasonRepeat,
+					EvalCount:  evalCount,
+				})
+				return nil
 			}
 
 			if lsResp.Content != "" && !lsResp.Stop {
@@ -2284,6 +2376,19 @@ func (s *llamaServerRunner) llamaServerChatRequest(req ChatRequest, stream bool)
 	if kwargs := llamaServerChatTemplateKwargs(req.Think); kwargs != nil {
 		body["chat_template_kwargs"] = kwargs
 	}
+	// llama-server owns the chat template on this path, so it already knows the
+	// thinking delimiters and only needs the budget.
+	window := api.ThinkBudgetWindow(s.ContextLength(), req.Options.NumPredict)
+	budget := req.Think.BudgetTokens(window)
+	if budget <= 0 {
+		budget = req.Options.ThinkBudget.BudgetTokens(window)
+	}
+	if budget > 0 {
+		body["thinking_budget_tokens"] = budget
+		// llama-server reads this from the chat body too, and needs it present
+		// to build the sequence it forces
+		body["reasoning_budget_message"] = req.Options.ThinkBudgetMessage
+	}
 	if format, err := llamaServerChatResponseFormat(req.Format); err != nil {
 		return nil, err
 	} else if format != nil {
@@ -2302,7 +2407,7 @@ func llamaServerChatTemplateKwargs(think *api.ThinkValue) map[string]any {
 		"enable_thinking": think.Bool(),
 	}
 	if think.IsString() {
-		if effort := think.String(); effort != "" {
+		if effort := think.Level(); effort != "" {
 			kwargs["reasoning_effort"] = effort
 		}
 	}
@@ -2312,6 +2417,16 @@ func llamaServerChatTemplateKwargs(think *api.ThinkValue) map[string]any {
 func llamaServerChatMessage(msg Message) (map[string]any, error) {
 	converted := map[string]any{
 		"role": msg.Role,
+	}
+	// Thinking has to reach the chat template, not just the client. A template
+	// that replays an assistant think block reads `reasoning_content`, and the
+	// Qwen-family templates gate that replay on the message being newer than
+	// the last real user query -- which, in an agentic tool loop, is every
+	// assistant turn since the task was set. Dropping the field here leaves
+	// those blocks empty, so a model re-derives each turn what it already
+	// worked out, and describes its own earlier turns as someone else's.
+	if msg.Thinking != "" {
+		converted["reasoning_content"] = msg.Thinking
 	}
 	if msg.ToolCallID != "" {
 		converted["tool_call_id"] = msg.ToolCallID
