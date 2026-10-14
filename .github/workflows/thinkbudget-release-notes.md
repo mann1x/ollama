@@ -15,6 +15,12 @@ number or a value that is neither a number nor a string was already refused,
 with the reason, but answered as a server error. It is the client's error, so
 `/api/chat` and `/api/generate` now answer 400, with the same message.
 
+**A model pulled for both runners runs on MLX when asked to.** With the GGUF
+and the MLX copy of a model both downloaded, a request with `runner: "mlx"`
+started the MLX runner on the GGUF copy and failed with `config.json not
+found in manifest` (Windows and Linux; Apple silicon picked MLX already). The
+MLX runner now always opens the MLX copy.
+
 **Also in this build, from the 0.40.3 series:**
 
 **Agent steps with thinking off no longer re-read the previous step.** With
