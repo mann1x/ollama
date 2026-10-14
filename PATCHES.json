@@ -42,8 +42,8 @@
         },
         "reldir": {
           "asset": "ollama-windows-amd64-mlx-reldir.zip",
-          "sha256": null,
-          "note": "PENDING: MLX moved (a59cc231 -> 97029597), so the v0.40.1 file no longer matches. Rebuilt by run 38561513795 (only=mlx-windows, asset_suffix=-reldir) from eda37d24; the sha256 is recorded here and mailed when it lands."
+          "sha256": "29b2b14e5b30fd0ed1c6abf5f1bbd5a65daf6e95b2e47b064787b370e363f9ef",
+          "note": "MLX moved (a59cc231 -> 97029597), so the v0.40.1 file no longer matches. Rebuilt by run 38561513795 (only=mlx-windows, asset_suffix=-reldir) from eda37d24. Ships cuDNN 9 (8 DLLs) beside mlx.dll, as the plain windows-mlx zip does."
         },
         "note": "uploaded 2026-10-14 by scripts/thinkbudget-mlx-assets.sh v0.40.4 --upload, after the release existed. The Linux and Windows archives are upstream's v0.40.4 files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from. mlx-runtime.txt sha256 98e91596b33e78e64b98a9f156d98bf563b4721cf82b66655299a0aeb170cd2f."
       }
