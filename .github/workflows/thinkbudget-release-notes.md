@@ -2,6 +2,21 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Agent steps with thinking off no longer re-read the previous step.** With
+thinking off, the Qwen3.5 renderer (also used for tev1 and the Qwen3.6 tags)
+starts each reply after an empty think block. The history then rendered that
+reply without the block, so the next request's prompt changed right after
+`assistant`. Qwen3.5 and 3.6 can only resume their cache at a saved
+checkpoint before that point, so every tool-calling step evaluated the whole
+previous step again. A reply after the last user message is now rendered
+exactly as it was generated. Measured through xOllama on qwen3.5:2b, thinking
+off, three agent steps: step 2 reuses 757 of 778 prompt tokens (315 before),
+step 3 1,282 of 1,303 (770 before). Gemma 4's large renderer had the same
+mismatch with its empty thought channel and gets the same rule. Earlier turns,
+before the last user message, keep the model's template form.
+
+**Also in this build, from v0.40.3-thinkbudget.1:**
+
 **A thinking level is no longer a thinking budget.** Until now `think` did two
 jobs: a level such as `"high"` was handed to the model as its reasoning level
 and was also read as a cap on thinking (half the response for `"high"`), and
