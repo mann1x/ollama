@@ -2,6 +2,21 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.4`, with llama.cpp `b11521`** (was `v0.40.3` and
+`b11351`). Every carried patch applies to the new base with the same changes
+it made before. Upstream moved MLX to `97029597` and MLX-C to `a341b492`, and
+deleted `llama/clef` along with its llama.cpp patch. The runtime archives are
+rebuilt for the new llama.cpp; the ones from `0.40.3-thinkbudget` do not match
+this build.
+
+**An unreadable `think_budget` is refused with 400, not 500.** A word that
+names no share (`"think_budget": "bogus"`), a fraction, zero, a negative
+number or a value that is neither a number nor a string was already refused,
+with the reason, but answered as a server error. It is the client's error, so
+`/api/chat` and `/api/generate` now answer 400, with the same message.
+
+**Also in this build, from the 0.40.3 series:**
+
 **Agent steps with thinking off no longer re-read the previous step.** With
 thinking off, the Qwen3.5 renderer (also used for tev1 and the Qwen3.6 tags)
 starts each reply after an empty think block. The history then rendered that
@@ -14,8 +29,6 @@ off, three agent steps: step 2 reuses 757 of 778 prompt tokens (315 before),
 step 3 1,282 of 1,303 (770 before). Gemma 4's large renderer had the same
 mismatch with its empty thought channel and gets the same rule. Earlier turns,
 before the last user message, keep the model's template form.
-
-**Also in this build, from v0.40.3-thinkbudget.1:**
 
 **A thinking level is no longer a thinking budget.** Until now `think` did two
 jobs: a level such as `"high"` was handed to the model as its reasoning level
@@ -56,34 +69,29 @@ What changes for you:
   report the budget from `think_budget` only. `/api/show` still takes `think`,
   but only `false` changes its answer.
 
-**Same base as `0.40.3-thinkbudget`:** Ollama `v0.40.3`, llama.cpp `b11351`.
-Only the `ollama` binaries are new. The runtime archives
-(`ollama-linux-amd64-runtime.tgz`, `ollama-linux-arm64-runtime.tgz`,
-`ollama-windows-amd64-runtime.zip`) are that release's files, byte for byte,
-with the same sha256. If you already have them, keep them.
-
 **MLX runtimes are on this release, for every platform**, with
 `mlx-runtime.txt` listing each file's sha256. Safetensors models run on MLX.
 `ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip` and
-`ollama-darwin-mlx.tgz` are upstream's 0.40.3 bytes, unchanged.
-`ollama-windows-amd64-mlx-reldir.zip` is the file from `0.40.1-thinkbudget`
-(MLX `a59cc231`, which 0.40.3 still uses): built here from the same MLX and
+`ollama-darwin-mlx.tgz` are upstream's 0.40.4 bytes, unchanged.
+`ollama-windows-amd64-mlx-reldir.zip` is built here from the same MLX and
 CMake as upstream's, with one difference. Upstream's `mlx.dll` looks for cuDNN
 in `C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
 in, and panics on the first generation that uses cuDNN on any machine without
 it there. Ours looks next to `mlx.dll`, where the zip puts the cuDNN and CUDA
-DLLs. On Windows, use the `-reldir` zip.
+DLLs. On Windows, use the `-reldir` zip. Because MLX moved, it is rebuilt for
+this release and is added to it when that build finishes, a few hours after
+the other files.
 
 **Everything else is carried unchanged from `0.40.3-thinkbudget`**: the
 response-scoped reasoning budget, the line-boundary close, Gemma 4 E2B/E4B
 assistant drafters, the Modelfile round-trip fixes, and the Gemma 4, Qwen 3.5,
 LFM2 and qwen3-coder parser fixes. The full list, with every patch's branch and
-commit, is `PATCHES.json` on the `think-budget` branch: 24 patches on the
-`v0.40.3` tag.
+commit, is `PATCHES.json` on the `think-budget` branch: 25 patches on the
+`v0.40.4` tag.
 
-`go test ./...` passes in full on this tree. The llama.cpp sources and the
-carried patches are byte-identical to `0.40.0-thinkbudget`'s, where
-llama.cpp's own `test-reasoning-budget` passes against `b11351`.
+`go test ./...` passes in full on this tree. The carried llama.cpp patches
+apply in full to a fresh `b11521` checkout, and llama.cpp's own
+`test-reasoning-budget` passes against it.
 
 ## Updating (unchanged since 0.34.2)
 
