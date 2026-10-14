@@ -9,12 +9,12 @@
     "is ours to carry and upstream_pr is null. Every other entry is 'open-upstream'.",
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
-  "base": "v0.40.3",
+  "base": "v0.40.4",
   "updated": "2026-10-14",
   "integration": {
     "branch": "think-budget",
-    "sha": "b8715d15",
-    "note": "b8715d15 is bee7e500's line plus the cherry-pick (-x) of up-qwen35-empty-think-history@03730b43, the renderer fix. Its tree is the apply-order replay with that branch merged last (921c8d54) plus this branch's own files; nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: bee7e500 is cec947e9's line plus the cherry-pick (-x) of up-think-budget@f8055cdd, the level/budget split. Its tree is the apply-order replay from v0.40.3 with the new up-think-budget and the rebuilt up-response-scope-think-budget (replay 68c8ecc6) plus this branch's own 16 files only; the new replay differs from the previous one (c19b09f4) in exactly the 32 files of f8055cdd. Nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: the think-budget commit whose tree this patch set describes: cec947e9, the merge of tag v0.40.3 (eab97e9f) into thinkbudget-0.40.3 (5a7be425). Upstream v0.40.2..v0.40.3 is 3 commits and 6 files (cmd/launch/claude.go, cmd/launch/codex.go and their tests, integration/migration_test.go, server/routes.go). server/routes.go is a patch-set file (up-truncated-tool-calls, up-think-budget, up-response-scope-think-budget): upstream's change there comments out the call to compatmigrate.StartLocalCompatibilityMigration and drops its import, in a hunk no patch touches. LLAMA_CPP_VERSION (b11351), llama/server, llama/compat, llama/clef, MLX_VERSION (a59cc231), MLX_C_VERSION and mlx/ are unchanged, so the inputs digest (release.inputs_digest_definition) stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. Its tree is the apply-order replay from v0.40.3 (r403/replay c19b09f4) plus this branch's own 16 files only; upstream changed none of them.",
+    "sha": "3123bb66",
+    "note": "3123bb66 merges upstream v0.40.4 into think-budget (parents 626565df, 45e60118). Its tree is the apply-order replay of the 25 patches at the shas below on v0.40.4 (r404/replay) plus this branch's own 16 files, which upstream did not touch; the patch-set delta against the tag is line-for-line the same as think-budget's against v0.40.3 (0 differing lines). LLAMA_CPP_VERSION moves b11351 -> b11521 and upstream deletes llama/compat/002-clef.patch and llama/clef, so the inputs digest moves d0cc3cdd... -> fd08a01da6f77eecece73d58ba8688123a4fbf6bcf662ddeee9139051899ccb6; llama/clef now contributes no entries. | PREVIOUS: b8715d15 is bee7e500's line plus the cherry-pick (-x) of up-qwen35-empty-think-history@03730b43, the renderer fix. Its tree is the apply-order replay with that branch merged last (921c8d54) plus this branch's own files; nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: bee7e500 is cec947e9's line plus the cherry-pick (-x) of up-think-budget@f8055cdd, the level/budget split. Its tree is the apply-order replay from v0.40.3 with the new up-think-budget and the rebuilt up-response-scope-think-budget (replay 68c8ecc6) plus this branch's own 16 files only; the new replay differs from the previous one (c19b09f4) in exactly the 32 files of f8055cdd. Nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: the think-budget commit whose tree this patch set describes: cec947e9, the merge of tag v0.40.3 (eab97e9f) into thinkbudget-0.40.3 (5a7be425). Upstream v0.40.2..v0.40.3 is 3 commits and 6 files (cmd/launch/claude.go, cmd/launch/codex.go and their tests, integration/migration_test.go, server/routes.go). server/routes.go is a patch-set file (up-truncated-tool-calls, up-think-budget, up-response-scope-think-budget): upstream's change there comments out the call to compatmigrate.StartLocalCompatibilityMigration and drops its import, in a hunk no patch touches. LLAMA_CPP_VERSION (b11351), llama/server, llama/compat, llama/clef, MLX_VERSION (a59cc231), MLX_C_VERSION and mlx/ are unchanged, so the inputs digest (release.inputs_digest_definition) stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. Its tree is the apply-order replay from v0.40.3 (r403/replay c19b09f4) plus this branch's own 16 files only; upstream changed none of them.",
     "release": {
       "tag": "v0.40.3-thinkbudget.2",
       "sha": "a344166e",
@@ -56,8 +56,8 @@
     }
   },
   "verification": {
-    "per_patch": "go build ./... plus go vet and go test on every package the patch touches, run on the rebased branch at the sha below. 2026-10-11, v0.40.3: all 24 pass. up-reasoning-budget-line-boundary, up-gemma4-assistant-shape and up-compat-readme touch no Go (build only). up-gofmt-vision-test-data's package (integration) needs its build tag; bare, vet reports upstream's own three warnings and the scope guard fails, identical to v0.40.0 through v0.40.2 and in files the patch does not touch. 22 tag-based patches rebased with git rebase --onto v0.40.3 v0.40.2, all without a conflict. The stacked branches were rebuilt on --no-ff merges of their dependencies at these shas, their base-merge conflicts resolved to the v0.40.2 bases' files (78ffb174, dc9d11ed; model/parsers/ and llama/compat/README.md are unchanged upstream); each new base differs from the old one in upstream's 6 files only.",
-    "apply_order": "the full sequence was replayed as sequential --no-ff merges from v0.40.3 (eab97e9f) to c19b09f4; exactly the known_conflicts occurred (the criss-cross README one merged clean, as before), each resolved to the v0.40.2 replay's file (6709a5ad), none of them a file upstream changed. The replay differs from the v0.40.2 replay in upstream's 6 files only, and by upstream's own added and removed lines. Full tree at c19b09f4: go build, go vet ./... clean, go test -count=1 ./... 62 packages ok and 0 failed, golangci-lint run --new-from-rev=v0.40.3 0 issues. think-budget's tree differs from it only in its own 16 files. llama.cpp and llama/ are unchanged, so the v0.40.0 clean-fetch gate and its 14/14 test-reasoning-budget result stand.",
+    "per_patch": "2026-10-14, v0.40.4: all 25 pass. 23 tag-based patches rebased with git rebase --onto v0.40.4 v0.40.3; one conflict (up-think-budget, see its note). Each patch's +/- lines against the tag are identical to its lines against v0.40.3. up-reasoning-budget-line-boundary, up-gemma4-assistant-shape and up-compat-readme touch no Go (build only; their gate is the clean fetch). up-gofmt-vision-test-data's package needs its build tag; bare, vet reports upstream's own three warnings and the scope guard fails, identical at plain v0.40.4. | go build ./... plus go vet and go test on every package the patch touches, run on the rebased branch at the sha below. 2026-10-11, v0.40.3: all 24 pass. up-reasoning-budget-line-boundary, up-gemma4-assistant-shape and up-compat-readme touch no Go (build only). up-gofmt-vision-test-data's package (integration) needs its build tag; bare, vet reports upstream's own three warnings and the scope guard fails, identical to v0.40.0 through v0.40.2 and in files the patch does not touch. 22 tag-based patches rebased with git rebase --onto v0.40.3 v0.40.2, all without a conflict. The stacked branches were rebuilt on --no-ff merges of their dependencies at these shas, their base-merge conflicts resolved to the v0.40.2 bases' files (78ffb174, dc9d11ed; model/parsers/ and llama/compat/README.md are unchanged upstream); each new base differs from the old one in upstream's 6 files only.",
+    "apply_order": "2026-10-14, v0.40.4: replayed as 25 sequential --no-ff merges from the tag; every conflict was a known_conflicts pair, resolved as listed. golangci-lint --new-from-rev=v0.40.4: 0 issues; go build, go vet and go test ./... pass on the integration tree. Clean fetch of b11521: 001, 004 and 005 apply in full (each reverses to pristine b11521). | the full sequence was replayed as sequential --no-ff merges from v0.40.3 (eab97e9f) to c19b09f4; exactly the known_conflicts occurred (the criss-cross README one merged clean, as before), each resolved to the v0.40.2 replay's file (6709a5ad), none of them a file upstream changed. The replay differs from the v0.40.2 replay in upstream's 6 files only, and by upstream's own added and removed lines. Full tree at c19b09f4: go build, go vet ./... clean, go test -count=1 ./... 62 packages ok and 0 failed, golangci-lint run --new-from-rev=v0.40.3 0 issues. think-budget's tree differs from it only in its own 16 files. llama.cpp and llama/ are unchanged, so the v0.40.0 clean-fetch gate and its 14/14 test-reasoning-budget result stand.",
     "full_tree": "v0.40.3 + ALL 24 patches in apply order: go build ./... clean, go vet ./... clean, go test -count=1 ./... ok=62 fail=0, golangci-lint run --new-from-rev=v0.40.3 0 issues. Measured 2026-10-11 on solidPC (linux/amd64).",
     "llama_cpp": "clean fetch of b11232 (6f767fe96) through llama/server's FetchContent with the replay's llama/compat: 001, 002 (upstream's clef), 004 and 005 all apply (each checked by git apply --reverse --check on the fetched tree), llama-server and its libraries build (CPU, -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_BACKEND_DL=OFF), and llama.cpp's tests/test-reasoning-budget.cpp, compiled against those libraries, passes 14/14 including 'spent response scope closes quietly' and 'spent response scope bars reopening'.",
     "llama_server": "ollama's own llama/server cmake (preset cpu) from think-budget e74b1daa: FetchContent b11081, 001+004+005 applied by cmake/apply-git-patches.cmake (verified in the fetched source), compat sources linked, llama-server built and runs (--version reports 161755f29; --reasoning-budget-scope present). Built with -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_BACKEND_DL=OFF: solidPC's gcc 10 cannot compile ggml's sapphirerapids variant (-mamx-tile), which no patch touches.",
@@ -73,9 +73,9 @@
     {
       "slug": "up-repeat-guard",
       "branch": "up-repeat-guard",
-      "sha": "b99f17d0",
+      "sha": "e540173b",
       "upstream_pr": 17563,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "llm/llama_server.go",
         "llm/repeat_guard.go",
@@ -89,9 +89,9 @@
     {
       "slug": "up-truncated-tool-calls",
       "branch": "up-truncated-tool-calls",
-      "sha": "4a260b1a",
+      "sha": "e381cf47",
       "upstream_pr": 17564,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "server/routes.go",
         "server/toolcalls.go",
@@ -103,9 +103,9 @@
     {
       "slug": "up-gemma4-object-close",
       "branch": "up-gemma4-object-close",
-      "sha": "a5d1fc0d",
+      "sha": "f0cc63f4",
       "upstream_pr": 17565,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go"
@@ -116,9 +116,9 @@
     {
       "slug": "up-think-budget",
       "branch": "up-think-budget",
-      "sha": "6c817c7c",
+      "sha": "953edd24",
       "upstream_pr": 17566,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "anthropic/anthropic.go",
         "anthropic/anthropic_test.go",
@@ -160,14 +160,14 @@
       ],
       "title": "api: bound thinking with a token budget, per request or per model",
       "status": "open-upstream",
-      "note": "2026-10-14, 6c817c7c (think-budget 0f315b73): a think_budget value that cannot be read is a 400, not a 500 -- reported by xollama (#1316); every refusal wraps model.ErrInvalidThinkBudget and handleScheduleError maps it to 400; TestInvalidThinkBudgetIsABadRequest covers chat and generate. | SPLIT 2026-10-14 (f8055cdd, one commit on top of 44343159, owner's ruling): a thinking level is no longer a thinking budget. think is stock v0.40.3 again (bool or model-defined level, handed to the model as written, never a bound; a number in think is refused; types/model/thinking.go, openai/, server/prompt.go, model/renderers/thinking.go, cmd/ and their tests are byte-identical to the tag, and the two harmony max->high blocks in server/routes.go are restored). The bound is think_budget only (request options, else the model's PARAMETER), with its own type model.ThinkBudget in types/model/think_budget.go: a token count or a share name (minimal, low, medium, high, max; xhigh = max); a count written as a string is a count; a word that names no share is refused. thinkBudgetForCompletion, thinkBudgetForShow and llamaServerChatRequest read think only for off. Anthropic thinking.budget_tokens becomes think true plus options.think_budget. BudgetTokens, Level, IsThinkLevel, ThinkLevels and the int case of ThinkValue are gone: a consumer that called them takes ThinkBudget.Tokens. WIRE CHANGE for clients: a level sent to get a cap caps nothing now; send options.think_budget. | BEFORE THE SPLIT: REBASED 2026-09-27 onto v0.34.4, which is not a plain rebase: upstream #18473 moved ThinkValue to types/model and made thinking levels model-defined (any string is valid on the wire; a model with stated controls resolves an unstated name to its default, one without them is checked by ValidateLegacyThinking). The budget is ported onto that design: the integer budget, the level-to-share table, BudgetTokens, Level and the xhigh alias live on model.ThinkValue in types/model/thinking.go; ValidateLegacyThinking accepts minimal and xhigh; --think forwards an unknown name to the server instead of refusing it. Upstream tests that pinned the old rules were changed only where this patch changes them on purpose (minimal no longer clamps to low; an integer is a budget, 0 and fractions are still refused; xhigh is max). One new commit, 2a097aca: upstream resolves think BEFORE the budget was read, so on every model with stated controls (qwen3.x, gemma4, ...) a budget was replaced by the default level's share -- think:1500 reached the runner as 1024 on a 4096 window -- and an omitted think armed a budget from the default level. ResolveThinking now reads an integer as thinking on, and the budget is read from the value the caller sent, gated only on the resolved value thinking. Test-first: 6 of 12 cases failed before it. 2026-09-27, b463e532: golangci-lint fixes reported by xollama (#488) -- bodyclose in server/think_budget_resolution_test.go (read the recorder's Code, never open Result()) and a gofumpt blank line in server/routes_generate_test.go. `golangci-lint run --new-from-rev=v0.34.4 ./...` over think-budget reports 0 issues."
+      "note": "2026-10-14, v0.40.4: one conflict in the rebase, server/routes.go, in two commits (676357e0 and f8055cdd): upstream replaced the m.Config.Parser = \"harmony\" assignment with parserNameForModel(). Resolved so the branch's net change to those blocks stays nothing; both harmony blocks are byte-identical to v0.40.4's. No patch line reads m.Config.Parser. | 2026-10-14, 6c817c7c (think-budget 0f315b73): a think_budget value that cannot be read is a 400, not a 500 -- reported by xollama (#1316); every refusal wraps model.ErrInvalidThinkBudget and handleScheduleError maps it to 400; TestInvalidThinkBudgetIsABadRequest covers chat and generate. | SPLIT 2026-10-14 (f8055cdd, one commit on top of 44343159, owner's ruling): a thinking level is no longer a thinking budget. think is stock v0.40.3 again (bool or model-defined level, handed to the model as written, never a bound; a number in think is refused; types/model/thinking.go, openai/, server/prompt.go, model/renderers/thinking.go, cmd/ and their tests are byte-identical to the tag, and the two harmony max->high blocks in server/routes.go are restored). The bound is think_budget only (request options, else the model's PARAMETER), with its own type model.ThinkBudget in types/model/think_budget.go: a token count or a share name (minimal, low, medium, high, max; xhigh = max); a count written as a string is a count; a word that names no share is refused. thinkBudgetForCompletion, thinkBudgetForShow and llamaServerChatRequest read think only for off. Anthropic thinking.budget_tokens becomes think true plus options.think_budget. BudgetTokens, Level, IsThinkLevel, ThinkLevels and the int case of ThinkValue are gone: a consumer that called them takes ThinkBudget.Tokens. WIRE CHANGE for clients: a level sent to get a cap caps nothing now; send options.think_budget. | BEFORE THE SPLIT: REBASED 2026-09-27 onto v0.34.4, which is not a plain rebase: upstream #18473 moved ThinkValue to types/model and made thinking levels model-defined (any string is valid on the wire; a model with stated controls resolves an unstated name to its default, one without them is checked by ValidateLegacyThinking). The budget is ported onto that design: the integer budget, the level-to-share table, BudgetTokens, Level and the xhigh alias live on model.ThinkValue in types/model/thinking.go; ValidateLegacyThinking accepts minimal and xhigh; --think forwards an unknown name to the server instead of refusing it. Upstream tests that pinned the old rules were changed only where this patch changes them on purpose (minimal no longer clamps to low; an integer is a budget, 0 and fractions are still refused; xhigh is max). One new commit, 2a097aca: upstream resolves think BEFORE the budget was read, so on every model with stated controls (qwen3.x, gemma4, ...) a budget was replaced by the default level's share -- think:1500 reached the runner as 1024 on a 4096 window -- and an omitted think armed a budget from the default level. ResolveThinking now reads an integer as thinking on, and the budget is read from the value the caller sent, gated only on the resolved value thinking. Test-first: 6 of 12 cases failed before it. 2026-09-27, b463e532: golangci-lint fixes reported by xollama (#488) -- bodyclose in server/think_budget_resolution_test.go (read the recorder's Code, never open Result()) and a gofumpt blank line in server/routes_generate_test.go. `golangci-lint run --new-from-rev=v0.34.4 ./...` over think-budget reports 0 issues."
     },
     {
       "slug": "up-mlx-libdl",
       "branch": "up-mlx-libdl",
-      "sha": "f6d2d623",
+      "sha": "06601f1a",
       "upstream_pr": 17567,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "mlx/mlx.go"
       ],
@@ -177,9 +177,9 @@
     {
       "slug": "up-gemma4-stray-channel-name",
       "branch": "up-gemma4-stray-channel-name",
-      "sha": "9ec97a81",
+      "sha": "e2f639a4",
       "upstream_pr": 17626,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go"
@@ -190,9 +190,9 @@
     {
       "slug": "qwen3coder-tolerate-malformed-tool-calls",
       "branch": "qwen3coder-tolerate-malformed-tool-calls",
-      "sha": "744216ab",
+      "sha": "63391884",
       "upstream_pr": 17914,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/qwen3coder.go",
         "model/parsers/qwen3coder_test.go",
@@ -205,9 +205,9 @@
     {
       "slug": "up-reasoning-budget-line-boundary",
       "branch": "up-reasoning-budget-line-boundary",
-      "sha": "b75697f0",
+      "sha": "f03b279b",
       "upstream_pr": 18212,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "llama/compat/004-reasoning-budget-line-boundary.patch",
         "llama/compat/README.md"
@@ -219,9 +219,9 @@
     {
       "slug": "up-native-thinking-replay",
       "branch": "up-native-thinking-replay",
-      "sha": "d7183478",
+      "sha": "49c22550",
       "upstream_pr": 18281,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "llm/llama_server.go",
         "llm/llama_server_test.go"
@@ -232,9 +232,9 @@
     {
       "slug": "up-gemma4-stray-closer",
       "branch": "up-gemma4-stray-closer",
-      "sha": "e1c43797",
+      "sha": "13b2f748",
       "upstream_pr": 18288,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go"
@@ -245,9 +245,9 @@
     {
       "slug": "up-jinja-runner-reuse",
       "branch": "up-jinja-runner-reuse",
-      "sha": "be2f0b73",
+      "sha": "2de84c10",
       "upstream_pr": 18289,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "server/sched.go",
         "server/sched_test.go"
@@ -258,9 +258,9 @@
     {
       "slug": "gemma4-toolcall-in-thinking",
       "branch": "gemma4-toolcall-in-thinking",
-      "sha": "057237d9",
+      "sha": "256ba097",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go"
@@ -272,9 +272,9 @@
     {
       "slug": "qwen35-toolcall-in-thinking",
       "branch": "qwen35-toolcall-in-thinking",
-      "sha": "69777102",
+      "sha": "37c57b6c",
       "upstream_pr": 18624,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/qwen35.go",
         "model/parsers/qwen35_boundary_test.go"
@@ -285,9 +285,9 @@
     {
       "slug": "up-gemma4-unparsed-tool-call-content",
       "branch": "up-gemma4-unparsed-tool-call-content",
-      "sha": "2e30deda",
+      "sha": "76825121",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_unparsed_test.go"
@@ -298,9 +298,9 @@
     {
       "slug": "up-toolcall-tags",
       "branch": "up-toolcall-tags",
-      "sha": "6a885213",
+      "sha": "d83d26b0",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_test.go",
@@ -314,9 +314,9 @@
     {
       "slug": "up-codex-request-count-mtime",
       "branch": "up-codex-request-count-mtime",
-      "sha": "d8c56985",
+      "sha": "c8da681d",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "cmd/launch/codex_app_mtime_test.go",
         "cmd/launch/codex_app_profile.go"
@@ -328,9 +328,9 @@
     {
       "slug": "up-fileutil-root-permission-tests",
       "branch": "up-fileutil-root-permission-tests",
-      "sha": "a441b2a5",
+      "sha": "ef29615f",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "cmd/internal/fileutil/files_test.go"
       ],
@@ -341,9 +341,9 @@
     {
       "slug": "up-gofmt-vision-test-data",
       "branch": "up-gofmt-vision-test-data",
-      "sha": "7b4f5462",
+      "sha": "0d742bed",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "integration/vision_test_data_test.go"
       ],
@@ -354,9 +354,9 @@
     {
       "slug": "up-lfm2-think-off-discard",
       "branch": "up-lfm2-think-off-discard",
-      "sha": "5767bb03",
+      "sha": "35898171",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/lfm2.go",
         "model/parsers/lfm2_think_off_test.go"
@@ -368,9 +368,9 @@
     {
       "slug": "up-gemma4-assistant-shape",
       "branch": "up-gemma4-assistant-shape",
-      "sha": "fede8b64",
+      "sha": "73ef56f6",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "llama/compat/005-gemma4-assistant-unchecked-tensor-shape.patch",
         "llama/compat/README.md"
@@ -382,9 +382,9 @@
     {
       "slug": "up-gemma4-swallowed-key",
       "branch": "up-gemma4-swallowed-key",
-      "sha": "3a9441e5",
+      "sha": "d5e1980a",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "files": [
         "model/parsers/gemma4.go",
         "model/parsers/gemma4_swallowed_key_test.go"
@@ -396,7 +396,7 @@
     {
       "slug": "up-compat-readme",
       "branch": "up-compat-readme",
-      "sha": "d08a1c66",
+      "sha": "91a29653",
       "upstream_pr": null,
       "rebased_onto": null,
       "depends_on": [
@@ -404,11 +404,11 @@
         "up-gemma4-assistant-shape"
       ],
       "base": {
-        "sha": "df311e97",
+        "sha": "50113d11",
         "merge_of": [
-          "v0.40.3",
-          "up-reasoning-budget-line-boundary@b75697f0",
-          "up-gemma4-assistant-shape@fede8b64"
+          "v0.40.4",
+          "up-reasoning-budget-line-boundary@f03b279b",
+          "up-gemma4-assistant-shape@73ef56f6"
         ],
         "note": "NOT the upstream tag: the text this patch writes is the union of the two dependencies' README entries, which exists on neither. The base merge keeps line-boundary's README (ada2a209) and leaves the union to the one commit on top."
       },
@@ -422,7 +422,7 @@
     {
       "slug": "up-response-scope-think-budget",
       "branch": "up-response-scope-think-budget",
-      "sha": "47918b45",
+      "sha": "37aeb2b0",
       "upstream_pr": null,
       "rebased_onto": null,
       "depends_on": [
@@ -431,14 +431,14 @@
         "up-toolcall-tags"
       ],
       "base": {
-        "sha": "c8a78d7b",
+        "sha": "ec5fe6c2",
         "merge_of": [
-          "v0.40.3",
-          "up-think-budget@f8055cdd",
-          "up-reasoning-budget-line-boundary@b75697f0",
-          "up-toolcall-tags@6a885213"
+          "v0.40.4",
+          "up-think-budget@953edd24",
+          "up-reasoning-budget-line-boundary@f03b279b",
+          "up-toolcall-tags@d83d26b0"
         ],
-        "note": "NOT the upstream tag, and cannot be: this patch calls parsers.ToolCallStartTagForParser (added by up-toolcall-tags) and extends the reasoning-budget request plumbing of up-think-budget and up-reasoning-budget-line-boundary. The branch is built on the merge of exactly those three at the shas above, so it merges cleanly only after all three and is listed last for that reason. 2026-10-14: c8a78d7b is the previous base 58e6567b with up-think-budget@f8055cdd merged in (--no-ff), so it still holds exactly these three at the shas above; the branch's own two commits were cherry-picked onto it without a conflict (31106b5e -> its parent, 9d54b7ca -> 47918b45). The old tip is kept as archive/up-response-scope-think-budget-9d54b7ca."
+        "note": "NOT the upstream tag, and cannot be: this patch calls parsers.ToolCallStartTagForParser (added by up-toolcall-tags) and extends the reasoning-budget request plumbing of up-think-budget and up-reasoning-budget-line-boundary. The branch is built on the merge of exactly those three at the shas above, so it merges cleanly only after all three and is listed last for that reason. 2026-10-14, v0.40.4: rebuilt from the tag as three --no-ff merges of the dependencies at the shas above (up-toolcall-tags conflicts in the three parser files as known_conflicts says; upstream changed none of them, so the previous base's resolution was taken byte for byte), then the branch's own two commits cherry-picked (-x) without a conflict. This also picks up up-think-budget@6c817c7c (the 400 fix), which the previous base predated."
       },
       "files": [
         "llama/compat/004-reasoning-budget-line-boundary.patch",
@@ -454,9 +454,9 @@
     {
       "slug": "up-modelfile-roundtrip",
       "branch": "up-modelfile-roundtrip",
-      "sha": "c781abb1",
+      "sha": "6531fdc0",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.0",
+      "rebased_onto": "v0.40.4",
       "depends_on": [],
       "files": [
         "parser/parser.go",
@@ -471,9 +471,9 @@
     {
       "slug": "up-qwen35-empty-think-history",
       "branch": "up-qwen35-empty-think-history",
-      "sha": "03730b43",
+      "sha": "bfd63324",
       "upstream_pr": null,
-      "rebased_onto": "v0.40.3",
+      "rebased_onto": "v0.40.4",
       "depends_on": [],
       "files": [
         "model/renderers/gemma4.go",
