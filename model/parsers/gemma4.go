@@ -158,6 +158,44 @@ func (p *Gemma4Parser) parseEvents(done bool) []gemma4Event {
 
 // longestOverlap returns the longest overlap between the suffix of bufStr and
 // a prefix of any of the given tags.
+// gemma4FirstTag reports whether the tag at idx is present and comes before
+// every other tag found (-1 is absent).
+func gemma4FirstTag(idx int, others ...int) bool {
+	if idx == -1 {
+		return false
+	}
+	for _, other := range others {
+		if other != -1 && other < idx {
+			return false
+		}
+	}
+	return true
+}
+
+// gemma4ChannelName measures the channel name that follows an opening tag:
+// the bytes to strip, 0 for none, or -1 when the buffer could still become
+// one. Gemma 4 writes "thought\n"; a re-opened channel has also been seen as
+// "<thought>" and, at the very end of a stream, as a bare "thought".
+func gemma4ChannelName(buf string, done bool) int {
+	for _, name := range []string{"thought\n", "<thought>\n", "<thought>"} {
+		if strings.HasPrefix(buf, name) {
+			return len(name)
+		}
+	}
+	if done {
+		if buf == "thought" {
+			return len(buf)
+		}
+		return 0
+	}
+	for _, name := range []string{"thought\n", "<thought>\n"} {
+		if strings.HasPrefix(name, buf) {
+			return -1
+		}
+	}
+	return 0
+}
+
 func longestOverlap(bufStr string, tags ...string) int {
 	maxOverlap := 0
 	for _, tag := range tags {
@@ -238,12 +276,12 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 		// Gemma 4 format: <|channel>thought\n...content...<channel|>
 		// In streaming mode, "thought" and "\n" may arrive in separate chunks.
 		if p.needsChannelNameStrip {
-			if strings.HasPrefix(bufStr, "thought\n") {
-				bufStr = bufStr[len("thought\n"):]
+			if name := gemma4ChannelName(bufStr, done); name > 0 {
+				bufStr = bufStr[name:]
 				p.buffer.Reset()
 				p.buffer.WriteString(bufStr)
 				p.needsChannelNameStrip = false
-			} else if !done && (bufStr == "thought" || strings.HasPrefix("thought\n", bufStr)) {
+			} else if name < 0 {
 				// Partial match — wait for more data.
 				return events, false
 			} else {
@@ -252,7 +290,44 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			}
 		}
 
-		if strings.Contains(bufStr, gemma4ThinkingCloseTag) {
+		// Whichever tag comes first decides. Besides the close tag the model
+		// writes two others here: a tool call opened before the thinking is
+		// closed, and the opening tag again, which it writes when it means to
+		// close the block or to begin another thought. Looking for the close
+		// tag alone turned both into reasoning text: the tag leaked into the
+		// thinking as "<|channel>thought", and a call written after it never
+		// became a call -- on one agentic turn that was a 43k-character edit.
+		closeIdx := strings.Index(bufStr, gemma4ThinkingCloseTag)
+		toolIdx := strings.Index(bufStr, gemma4ToolCallOpenTag)
+		reopenIdx := strings.Index(bufStr, gemma4ThinkingOpenTag)
+
+		if gemma4FirstTag(toolIdx, closeIdx, reopenIdx) {
+			// The call closes the thinking: it is the model's action, not part
+			// of its reasoning.
+			thinking := strings.TrimRightFunc(bufStr[:toolIdx], unicode.IsSpace)
+			p.buffer.Reset()
+			p.buffer.WriteString(bufStr[toolIdx+len(gemma4ToolCallOpenTag):])
+			p.state = Gemma4CollectingToolCall
+			if len(thinking) > 0 {
+				events = append(events, gemma4EventThinkingContent{content: thinking})
+			}
+			return events, true
+		}
+
+		if gemma4FirstTag(reopenIdx, closeIdx) {
+			// A channel opened inside the one already open: drop the tag and
+			// the channel name after it, and keep collecting the same thinking.
+			thinking := strings.TrimRightFunc(bufStr[:reopenIdx], unicode.IsSpace)
+			p.buffer.Reset()
+			p.buffer.WriteString(bufStr[reopenIdx+len(gemma4ThinkingOpenTag):])
+			p.needsChannelNameStrip = true
+			if len(thinking) > 0 {
+				events = append(events, gemma4EventThinkingContent{content: thinking + "\n"})
+			}
+			return events, true
+		}
+
+		if closeIdx != -1 {
 			split := strings.SplitN(bufStr, gemma4ThinkingCloseTag, 2)
 			thinking := strings.TrimRightFunc(split[0], unicode.IsSpace)
 			remaining := strings.TrimLeftFunc(split[1], unicode.IsSpace)
@@ -267,9 +342,9 @@ func (p *Gemma4Parser) eat(done bool) ([]gemma4Event, bool) {
 			return events, true
 		}
 
-		// Check for partial close tag
+		// Check for a partial tag of any of the three
 		if !done {
-			if overlapLen := overlap(bufStr, gemma4ThinkingCloseTag); overlapLen > 0 {
+			if overlapLen := longestOverlap(bufStr, gemma4ThinkingCloseTag, gemma4ToolCallOpenTag, gemma4ThinkingOpenTag); overlapLen > 0 {
 				beforePartialTag := bufStr[:len(bufStr)-overlapLen]
 				trailingLen := trailingWhitespaceLen(beforePartialTag)
 				ambiguousStart := len(beforePartialTag) - trailingLen

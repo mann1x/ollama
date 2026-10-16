@@ -1501,3 +1501,87 @@ func TestParseGemma4ToolCall_RawQuotedStructuralString(t *testing.T) {
 		t.Fatalf("tool call mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// feedGemma4 runs chunks through a thinking-enabled parser and returns what
+// came out of each channel.
+func feedGemma4(t *testing.T, chunks []string) (string, string, []api.ToolCall) {
+	t.Helper()
+	parser := &Gemma4Parser{hasThinkingSupport: true}
+	parser.Init(nil, nil, &api.ThinkValue{Value: true})
+	var content, thinking strings.Builder
+	var calls []api.ToolCall
+	for i, chunk := range chunks {
+		c, th, tc, err := parser.Add(chunk, i == len(chunks)-1)
+		if err != nil {
+			t.Fatalf("Add() error on chunk %d: %v", i, err)
+		}
+		content.WriteString(c)
+		thinking.WriteString(th)
+		calls = append(calls, tc...)
+	}
+	return content.String(), thinking.String(), calls
+}
+
+func TestGemma4Parser_ReopenedChannelInsideThinking(t *testing.T) {
+	cases := map[string][]string{
+		"whole":            {"<|channel>thought\nLet's try to restore first.\n<|channel>thought\nThe file is back.<channel|>Done."},
+		"angle name":       {"<|channel>thought\nLet's try to restore first.\n\n<|channel><thought>\nThe file is back.<channel|>Done."},
+		"split tag":        {"<|channel>thought\nLet's try to restore first.\n<|chan", "nel>thou", "ght\nThe file is back.<chan", "nel|>Done."},
+		"split after name": {"<|channel>thought\nLet's try to restore first.\n<|channel>thought", "\nThe file is back.<channel|>Done."},
+	}
+	for name, chunks := range cases {
+		t.Run(name, func(t *testing.T) {
+			content, thinking, calls := feedGemma4(t, chunks)
+			if strings.Contains(thinking, "<|channel>") || strings.Contains(thinking, "thought\n") || strings.Contains(thinking, "<thought>") {
+				t.Errorf("tag leaked into thinking: %q", thinking)
+			}
+			if !strings.Contains(thinking, "first.") || !strings.Contains(thinking, "The file is back.") {
+				t.Errorf("thinking lost text: %q", thinking)
+			}
+			if content != "Done." {
+				t.Errorf("content = %q, want %q", content, "Done.")
+			}
+			if len(calls) != 0 {
+				t.Errorf("unexpected calls: %+v", calls)
+			}
+		})
+	}
+}
+
+func TestGemma4Parser_ReopenedChannelAtEndOfStream(t *testing.T) {
+	_, thinking, _ := feedGemma4(t, []string{"<|channel>thought\nLet's do it.\n<|channel>thought"})
+	if thinking != "Let's do it.\n" {
+		t.Errorf("thinking = %q, want %q", thinking, "Let's do it.\n")
+	}
+}
+
+func TestGemma4Parser_ToolCallOpenedInsideThinking(t *testing.T) {
+	want := []api.ToolCall{{
+		Function: api.ToolCallFunction{
+			Name:      "editor",
+			Arguments: testArgs(map[string]any{"path": "manic_miner.html"}),
+		},
+	}}
+	cases := map[string][]string{
+		"no close":       {`<|channel>thought` + "\nLet's do it.\n" + `<|tool_call>call:editor{path:<|"|>manic_miner.html<|"|>}<tool_call|>`},
+		"after reopen":   {`<|channel>thought` + "\nLet's do it.\n<|channel>thought\n" + `<|tool_call>call:editor{path:<|"|>manic_miner.html<|"|>}<tool_call|>`},
+		"split open tag": {"<|channel>thought\nLet's do it.\n<|tool", `_call>call:editor{path:<|"|>manic_`, `miner.html<|"|>}<tool_call|>`},
+	}
+	for name, chunks := range cases {
+		t.Run(name, func(t *testing.T) {
+			content, thinking, calls := feedGemma4(t, chunks)
+			if diff := cmp.Diff(want, calls, argsComparer); diff != "" {
+				t.Errorf("tool calls mismatch (-want +got):\n%s", diff)
+			}
+			if strings.Contains(thinking, "tool_call") || strings.Contains(thinking, "<|channel>") {
+				t.Errorf("call or tag leaked into thinking: %q", thinking)
+			}
+			if !strings.HasPrefix(thinking, "Let's do it.") {
+				t.Errorf("thinking = %q", thinking)
+			}
+			if content != "" {
+				t.Errorf("content = %q, want none", content)
+			}
+		})
+	}
+}
