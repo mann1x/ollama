@@ -16,36 +16,37 @@
     "sha": "e025d6e7",
     "note": "e025d6e7 merges upstream v0.40.6 into think-budget (parents 80985011, 2476d5ea). Its tree is the apply-order replay of the 27 patches at the shas below on v0.40.6 (r406/replay) plus this branch's own 16 files, which upstream did not touch; the patch-set delta against the tag is line-for-line the same as think-budget's against v0.40.4 (0 differing lines). v0.40.5 was skipped. LLAMA_CPP_VERSION moves b11521 -> b11669, so the inputs digest moves fd08a01d... -> 83f79eeb4fc4d7e3582375adac7327aaf15d79b57cdfa1b32250e95db7291bfa. MLX moves 97029597 -> bebd6422 (MLX_C unchanged). | PREVIOUS: 36c0592d is 555ed8088's line plus the cherry-pick (-x) of up-gemma4-channel-in-thinking@e21002e4. Nothing under LLAMA_CPP_VERSION, llama/server, llama/compat or llama/clef changed, so the inputs digest stays fd08a01d...; the v0.40.4-thinkbudget release (built at eda37d24) does not carry this Go-only patch. | PREVIOUS: abffea8d is 3123bb66's line plus the --no-ff merge of up-mlxrunner-manifest-list@20dcfd9f. Nothing under LLAMA_CPP_VERSION, llama/server, llama/compat or llama/clef changed, so the inputs digest stays fd08a01d...; the v0.40.4-thinkbudget release (built at eda37d24) carries runtimes only, which this Go-only patch does not touch. | PREVIOUS: 3123bb66 merges upstream v0.40.4 into think-budget (parents 626565df, 45e60118). Its tree is the apply-order replay of the 25 patches at the shas below on v0.40.4 (r404/replay) plus this branch's own 16 files, which upstream did not touch; the patch-set delta against the tag is line-for-line the same as think-budget's against v0.40.3 (0 differing lines). LLAMA_CPP_VERSION moves b11351 -> b11521 and upstream deletes llama/compat/002-clef.patch and llama/clef, so the inputs digest moves d0cc3cdd... -> fd08a01da6f77eecece73d58ba8688123a4fbf6bcf662ddeee9139051899ccb6; llama/clef now contributes no entries. | PREVIOUS: b8715d15 is bee7e500's line plus the cherry-pick (-x) of up-qwen35-empty-think-history@03730b43, the renderer fix. Its tree is the apply-order replay with that branch merged last (921c8d54) plus this branch's own files; nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: bee7e500 is cec947e9's line plus the cherry-pick (-x) of up-think-budget@f8055cdd, the level/budget split. Its tree is the apply-order replay from v0.40.3 with the new up-think-budget and the rebuilt up-response-scope-think-budget (replay 68c8ecc6) plus this branch's own 16 files only; the new replay differs from the previous one (c19b09f4) in exactly the 32 files of f8055cdd. Nothing under LLAMA_CPP_VERSION, llama/server, llama/compat, llama/clef or mlx/ changed, so the inputs digest stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. | PREVIOUS: the think-budget commit whose tree this patch set describes: cec947e9, the merge of tag v0.40.3 (eab97e9f) into thinkbudget-0.40.3 (5a7be425). Upstream v0.40.2..v0.40.3 is 3 commits and 6 files (cmd/launch/claude.go, cmd/launch/codex.go and their tests, integration/migration_test.go, server/routes.go). server/routes.go is a patch-set file (up-truncated-tool-calls, up-think-budget, up-response-scope-think-budget): upstream's change there comments out the call to compatmigrate.StartLocalCompatibilityMigration and drops its import, in a hunk no patch touches. LLAMA_CPP_VERSION (b11351), llama/server, llama/compat, llama/clef, MLX_VERSION (a59cc231), MLX_C_VERSION and mlx/ are unchanged, so the inputs digest (release.inputs_digest_definition) stays d0cc3cdd727fb23a44722f94920d54f312f3989add1c8798a3c79a66989f7d76. Its tree is the apply-order replay from v0.40.3 (r403/replay c19b09f4) plus this branch's own 16 files only; upstream changed none of them.",
     "release": {
-      "tag": "v0.40.4-thinkbudget",
-      "sha": "eda37d24",
-      "inputs_digest": "fd08a01da6f77eecece73d58ba8688123a4fbf6bcf662ddeee9139051899ccb6",
+      "tag": "v0.40.6-thinkbudget",
+      "sha": "83e2e0cd",
+      "inputs_digest": "83f79eeb4fc4d7e3582375adac7327aaf15d79b57cdfa1b32250e95db7291bfa",
       "inputs_digest_definition": "git ls-tree -r <rev> -- LLAMA_CPP_VERSION llama/server llama/compat llama/clef | grep -v '[[:space:]]llama/compat/README\\.md$' | sha256sum (from v0.40.1 on, xollama mails 888/889; before, without llama/clef: 9defcc4413930651433008f477efa9c7e54ab33bb6618f7eb032cbe8a8e66df2 here, unchanged from v0.40.0 although llama/clef/clef.cpp changed)",
       "assets": {
-        "ollama-linux-amd64-runtime.tgz": "6ec472ac111709301c0b324f0f5b0f66d5fe54cd6a7fd96c209975f234c6f449",
-        "ollama-linux-arm64-runtime.tgz": "57b6b2a7cc61573408447a3d172a1b2a945c824fa1465f62fe818b791f81339d",
-        "ollama-windows-amd64-runtime.zip": "3dbb6875e065e9d7d137fd1f6f314156f5559f05b3e66c732ddedd8870a471fb",
-        "ollama-linux-amd64": "56930b2e73b64049d0f953113138638ac9d64302631dcc5de4640e1c5e0b1328"
+        "ollama-linux-amd64-runtime.tgz": "13291334e2ae7b79221290e0bcb9eb369c5edd68a49b0dc132982fcf5a4ac32b",
+        "ollama-linux-arm64-runtime.tgz": "60aaa4ec88025dcda0ee1dee3709adea920521c06ded26af5312cc6cf39034dd",
+        "ollama-windows-amd64-runtime.zip": "a00e7f96fdbaf5fffcab0d77f50c3c060c1a19b15febacd37699d4681e8a1968",
+        "ollama-linux-amd64": "b723fc392a6afa1c5d227652bdf35de6f9bdac8d063bfe1aad5f658f182fb34a"
       },
-      "run": 38560149239,
-      "note": "v0.40.4 base, llama.cpp b11521; built 2026-10-14 by run 38560149239 from eda37d24 (merge 3123bb66 + release notes f8284f41 + manifest eda37d24): prepare, three binaries, linux-runtime, windows-runtime, linux-arm64, windows-app, checksums green; reuse-runtimes skipped. THE RUNTIMES WERE REBUILT (inputs digest d0cc3cdd -> fd08a01d; llama/clef is deleted upstream and contributes no entries). Each runtime job logged 'patch applied:' for forced_end_pos, REASONING_BUDGET_SCOPE_RESPONSE and WAITING_BOUNDARY. Checked after download: ollama-linux-amd64 has the sha256 above and carries the version string 0.40.4-thinkbudget (read from the bytes, not run). sha256sum.txt regenerated from the asset digests after the MLX uploads (12 entries, b0c2cff3); it is regenerated again when the reldir zip lands. | PREVIOUS: v0.40.3-thinkbudget.2 @ a344166e",
+      "run": 39012927066,
+      "note": "v0.40.6 base, llama.cpp b11669; built 2026-10-17 by run 39012927066 from 83e2e0cd (merge e025d6e7 + manifest 83e2e0cd; the release notes commit c7353e16 came after the dispatch, so the body was set with gh release edit and the inputs digest is the same at c7353e16): prepare, three binaries, linux-runtime, windows-runtime, linux-arm64, windows-app, checksums green; reuse-runtimes and windows-mlx skipped. THE RUNTIMES WERE REBUILT (inputs digest fd08a01d -> 83f79eeb, LLAMA_CPP_VERSION b11521 -> b11669). Each runtime job logged 'patch applied:' for forced_end_pos, REASONING_BUDGET_SCOPE_RESPONSE and WAITING_BOUNDARY. Checked after download: ollama-linux-amd64 has the sha256 above and carries the version string 0.40.6-thinkbudget (read from the bytes, not run). sha256sum.txt regenerated from the asset digests after the MLX uploads (12 entries, f458eb62); it is regenerated again when the reldir zip lands. | PREVIOUS: v0.40.4-thinkbudget @ eda37d24",
       "mlx": {
-        "upstream": "v0.40.4",
-        "MLX_VERSION": "97029597882f674a596958bc71fdec3213ccc192",
+        "upstream": "v0.40.6",
+        "MLX_VERSION": "bebd6422f8db88d56e6220520a35bcd146f823f8",
         "MLX_C_VERSION": "a341b4925024b88b2c593468f16e12f5e17315da",
         "assets": {
-          "ollama-linux-amd64-mlx.tar.zst": "95e9253dd457687f82682b891dc4d454263c29f714310c4735da8245e02b6187",
-          "ollama-windows-amd64-mlx.zip": "f593024df3dabb10fe73d1761bd6f6280200862f24ced7c7b3d1bd0ca467d8a0",
-          "ollama-darwin-mlx.tgz": "14a39387bc17e71fd0cbe4b20112d9dbd9fbfb38f4e0bfad406c40b0103d4135"
+          "ollama-linux-amd64-mlx.tar.zst": "ad0956e72961d476bcff4a5a39296b94a5f1112d38830f2c0f0b4ab380b3d27d",
+          "ollama-windows-amd64-mlx.zip": "34a28e51f90ae9f484e1a8c00311aa2f4ffec4943fd8af51cec577b791ebd0fa",
+          "ollama-darwin-mlx.tgz": "ba3918a3d35b23d7ddf5024e9a7f3f67c2ce1d6c11d71fa479e6f7c1652b6a01"
         },
         "darwin_source": {
-          "ollama-darwin.tgz": "a4ceae4b2aaf18df37ebcbfb56ba3a37a87838631112d66c2be07268693c8d58"
+          "ollama-darwin.tgz": "b2b55434865a668decb494110d7fd970eed3ecc8837be2872f672ccbb95df974"
         },
         "reldir": {
           "asset": "ollama-windows-amd64-mlx-reldir.zip",
-          "sha256": "29b2b14e5b30fd0ed1c6abf5f1bbd5a65daf6e95b2e47b064787b370e363f9ef",
-          "note": "MLX moved (a59cc231 -> 97029597), so the v0.40.1 file no longer matches. Rebuilt by run 38561513795 (only=mlx-windows, asset_suffix=-reldir) from eda37d24. Ships cuDNN 9 (8 DLLs) beside mlx.dll, as the plain windows-mlx zip does."
+          "sha256": null,
+          "run": 39013406859,
+          "note": "PENDING: MLX moved (97029597 -> bebd6422), so the v0.40.4 file no longer matches. Rebuilding by run 39013406859 (only=mlx-windows, asset_suffix=-reldir) from 83e2e0cd; the sha256 is recorded when it lands."
         },
-        "note": "uploaded 2026-10-14 by scripts/thinkbudget-mlx-assets.sh v0.40.4 --upload, after the release existed. The Linux and Windows archives are upstream's v0.40.4 files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from. mlx-runtime.txt sha256 98e91596b33e78e64b98a9f156d98bf563b4721cf82b66655299a0aeb170cd2f."
+        "note": "uploaded 2026-10-17 by scripts/thinkbudget-mlx-assets.sh v0.40.6 --upload, after the release existed. The Linux and Windows archives are upstream's v0.40.6 files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from. mlx-runtime.txt sha256 f3222e5f478a0db69e06e6219c696a7e5617afb7f2fcc062cfd0833cce1bb3de."
       }
     }
   },
