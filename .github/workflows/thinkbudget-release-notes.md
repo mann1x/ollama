@@ -2,24 +2,30 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.40.4`, with llama.cpp `b11521`** (was `v0.40.3` and
-`b11351`). Every carried patch applies to the new base with the same changes
-it made before. Upstream moved MLX to `97029597` and MLX-C to `a341b492`, and
-deleted `llama/clef` along with its llama.cpp patch. The runtime archives are
-rebuilt for the new llama.cpp; the ones from `0.40.3-thinkbudget` do not match
-this build.
+**Rebased onto Ollama `v0.40.6`, with llama.cpp `b11669`** (was `v0.40.4` and
+`b11521`; `v0.40.5` is skipped). Every carried patch applies to the new base
+with the same changes it made before. Upstream moved MLX to `bebd6422`;
+MLX-C is unchanged. The runtime archives are rebuilt for the new llama.cpp;
+the ones from `0.40.4-thinkbudget` do not match this build.
 
-**An unreadable `think_budget` is refused with 400, not 500.** A word that
-names no share (`"think_budget": "bogus"`), a fraction, zero, a negative
-number or a value that is neither a number nor a string was already refused,
-with the reason, but answered as a server error. It is the client's error, so
-`/api/chat` and `/api/generate` now answer 400, with the same message.
+**Gemma 4 no longer leaks a channel tag into its reasoning.** When Gemma 4
+opened its thought channel again while it was already thinking, the tag and
+the channel's name (`<|channel>thought`) showed up in the reasoning text. The
+parser now drops them and continues the reasoning on a new line.
 
 **A model pulled for both runners runs on MLX when asked to.** With the GGUF
 and the MLX copy of a model both downloaded, a request with `runner: "mlx"`
 started the MLX runner on the GGUF copy and failed with `config.json not
 found in manifest` (Windows and Linux; Apple silicon picked MLX already). The
 MLX runner now always opens the MLX copy.
+
+**Also in this build, from the 0.40.4 series:**
+
+**An unreadable `think_budget` is refused with 400, not 500.** A word that
+names no share (`"think_budget": "bogus"`), a fraction, zero, a negative
+number or a value that is neither a number nor a string was already refused,
+with the reason, but answered as a server error. It is the client's error, so
+`/api/chat` and `/api/generate` now answer 400, with the same message.
 
 **Also in this build, from the 0.40.3 series:**
 
