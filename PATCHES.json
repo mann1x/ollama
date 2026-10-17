@@ -27,7 +27,7 @@
         "ollama-linux-amd64": "b723fc392a6afa1c5d227652bdf35de6f9bdac8d063bfe1aad5f658f182fb34a"
       },
       "run": 39012927066,
-      "note": "v0.40.6 base, llama.cpp b11669; built 2026-10-17 by run 39012927066 from 83e2e0cd (merge e025d6e7 + manifest 83e2e0cd; the release notes commit c7353e16 came after the dispatch, so the body was set with gh release edit and the inputs digest is the same at c7353e16): prepare, three binaries, linux-runtime, windows-runtime, linux-arm64, windows-app, checksums green; reuse-runtimes and windows-mlx skipped. THE RUNTIMES WERE REBUILT (inputs digest fd08a01d -> 83f79eeb, LLAMA_CPP_VERSION b11521 -> b11669). Each runtime job logged 'patch applied:' for forced_end_pos, REASONING_BUDGET_SCOPE_RESPONSE and WAITING_BOUNDARY. Checked after download: ollama-linux-amd64 has the sha256 above and carries the version string 0.40.6-thinkbudget (read from the bytes, not run). sha256sum.txt regenerated from the asset digests after the MLX uploads (12 entries, f458eb62); it is regenerated again when the reldir zip lands. | PREVIOUS: v0.40.4-thinkbudget @ eda37d24",
+      "note": "v0.40.6 base, llama.cpp b11669; built 2026-10-17 by run 39012927066 from 83e2e0cd (merge e025d6e7 + manifest 83e2e0cd; the release notes commit c7353e16 came after the dispatch, so the body was set with gh release edit and the inputs digest is the same at c7353e16): prepare, three binaries, linux-runtime, windows-runtime, linux-arm64, windows-app, checksums green; reuse-runtimes and windows-mlx skipped. THE RUNTIMES WERE REBUILT (inputs digest fd08a01d -> 83f79eeb, LLAMA_CPP_VERSION b11521 -> b11669). Each runtime job logged 'patch applied:' for forced_end_pos, REASONING_BUDGET_SCOPE_RESPONSE and WAITING_BOUNDARY. Checked after download: ollama-linux-amd64 has the sha256 above and carries the version string 0.40.6-thinkbudget (read from the bytes, not run). sha256sum.txt regenerated from the asset digests after the MLX uploads (12 entries, f458eb62), and again after the reldir zip landed (13 entries, f4db2abc). | PREVIOUS: v0.40.4-thinkbudget @ eda37d24",
       "mlx": {
         "upstream": "v0.40.6",
         "MLX_VERSION": "bebd6422f8db88d56e6220520a35bcd146f823f8",
@@ -42,9 +42,9 @@
         },
         "reldir": {
           "asset": "ollama-windows-amd64-mlx-reldir.zip",
-          "sha256": null,
+          "sha256": "f9bde5de83e65aafd3fc69967f7890441cd15c3b6e9f35b34f6d6ddb241af65e",
           "run": 39013406859,
-          "note": "PENDING: MLX moved (97029597 -> bebd6422), so the v0.40.4 file no longer matches. Rebuilding by run 39013406859 (only=mlx-windows, asset_suffix=-reldir) from 83e2e0cd; the sha256 is recorded when it lands."
+          "note": "MLX moved (97029597 -> bebd6422), so the v0.40.4 file no longer matches. Rebuilt by run 39013406859 (only=mlx-windows, asset_suffix=-reldir) from 83e2e0cd, about 1h53m. Ships cuDNN 9 (8 DLLs) beside mlx.dll in lib/ollama/mlx_cuda_v13, as the plain windows-mlx zip does; sha256 checked after download."
         },
         "note": "uploaded 2026-10-17 by scripts/thinkbudget-mlx-assets.sh v0.40.6 --upload, after the release existed. The Linux and Windows archives are upstream's v0.40.6 files and their sha256 equals upstream's sha256sum.txt (compared independently of the script), as does the ollama-darwin.tgz the macOS archive was cut from. mlx-runtime.txt sha256 f3222e5f478a0db69e06e6219c696a7e5617afb7f2fcc062cfd0833cce1bb3de."
       }
