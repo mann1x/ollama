@@ -1171,6 +1171,12 @@ func (s *llamaServerRunner) resetLoadAccounting() {
 	for k := range s.systemFreeAtLoad {
 		delete(s.systemFreeAtLoad, k)
 	}
+	// The parsed buffers belong to the process being replaced. Kept, a
+	// projector buffer from a GPU attempt stayed counted after the retry put
+	// the projector on the CPU.
+	if s.output != nil {
+		s.output.resetLocked()
+	}
 	if s.status != nil {
 		s.status.SetLastError("")
 	}
@@ -2983,17 +2989,43 @@ func PredictServerVRAM(modelPath string, f *gguf.Model, numCtx int) uint64 {
 //	CUDA_Host compute buffer size =   268.05 MiB
 //	MTL0_Mapped model buffer size =  1918.35 MiB
 //	ROCm0 model buffer size =  1918.35 MiB
+//
+// Output is parsed a line at a time. llama-server's stdout and stderr share
+// one pipe, and a read from it ends wherever the pipe had data, not at a line
+// end: a buffer line split across two writes matched in neither, and a 9B
+// model fully on the GPU was reported at 373 MiB because its model and KV
+// lines were lost that way.
 type memoryParsingWriter struct {
 	inner   io.Writer
 	runner  *llamaServerRunner
 	buffers map[memoryBufferKey]memoryBuffer
+	// pending holds the unterminated tail of the last write.
+	pending []byte
+	// inDraft is set while llama-server builds a speculative draft model or
+	// context, whose buffers are allocated beside the target's.
+	inDraft bool
 }
 
 type memoryBufferKey struct {
 	component string
 	backend   string
 	kind      string
+	// draft marks a buffer of the speculative draft. The draft logs the same
+	// component and backend names as the target, so without it an MTP
+	// draft's 512 MiB KV cache replaced the target's 2176 MiB one.
+	draft bool
 }
+
+// maxPendingLine bounds the unterminated tail kept between writes. A buffer
+// line is under 100 bytes; anything this long without a newline is not one.
+const maxPendingLine = 64 * 1024
+
+// draftStartRegex and draftEndRegex bracket the draft's construction
+// (common/speculative.cpp, tools/server).
+var (
+	draftStartRegex = regexp.MustCompile(`creating MTP draft context|loading draft model`)
+	draftEndRegex   = regexp.MustCompile(`speculative decoding context initialized|model loaded`)
+)
 
 type memoryBuffer struct {
 	bytes uint64
@@ -3051,43 +3083,91 @@ func (w *memoryParsingWriter) Write(b []byte) (int, error) {
 			w.runner.memoryMu.Lock()
 			defer w.runner.memoryMu.Unlock()
 
-			if match := deviceFreeRegex.FindSubmatch(b); match != nil {
-				devName := string(match[1])
-				if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
-					w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
+			data := append(w.pending, b...)
+			end := bytes.LastIndexByte(data, '\n')
+			if end < 0 {
+				if len(data) > maxPendingLine {
+					data = data[len(data)-maxPendingLine:]
 				}
+				w.pending = data
+				return
 			}
-			for _, match := range offloadedLayersRegex.FindAllSubmatch(b, -1) {
-				loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
-				total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
-				if loadedErr == nil && totalErr == nil {
-					w.runner.gpuLayers = loaded
-					w.runner.totalLayers = total
-				}
+			for _, line := range bytes.Split(data[:end], []byte("\n")) {
+				w.parseLineLocked(bytes.TrimSuffix(line, []byte("\r")))
 			}
-			for _, match := range fitOverflowingLayersRegex.FindAllSubmatch(b, -1) {
-				overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
-				if err == nil && overflowing > 0 {
-					w.runner.gpuLayerOverflow += int(overflowing)
-				}
-			}
-			for _, match := range bufferSizeRegex.FindAllSubmatch(b, -1) {
-				backendName := string(match[2])
-				if mib, err := strconv.ParseFloat(string(match[4]), 64); err == nil {
-					if w.buffers == nil {
-						w.buffers = make(map[memoryBufferKey]memoryBuffer)
-					}
-					w.buffers[memoryBufferKey{
-						component: string(match[1]),
-						backend:   backendName,
-						kind:      string(match[3]),
-					}] = memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
-					w.updateRunnerMemoryLocked()
-				}
-			}
+			w.pending = append([]byte(nil), data[end+1:]...)
 		}()
 	}
 	return w.inner.Write(b)
+}
+
+// parseLineLocked reads one complete line of llama-server output.
+func (w *memoryParsingWriter) parseLineLocked(line []byte) {
+	if match := deviceFreeRegex.FindSubmatch(line); match != nil {
+		devName := string(match[1])
+		if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
+			w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
+		}
+	}
+	if match := offloadedLayersRegex.FindSubmatch(line); match != nil {
+		loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
+		total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
+		if loadedErr == nil && totalErr == nil {
+			w.runner.gpuLayers = loaded
+			w.runner.totalLayers = total
+		}
+	}
+	if match := fitOverflowingLayersRegex.FindSubmatch(line); match != nil {
+		overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
+		if err == nil && overflowing > 0 {
+			w.runner.gpuLayerOverflow += int(overflowing)
+		}
+	}
+	if draftStartRegex.Match(line) {
+		w.inDraft = true
+		return
+	}
+	if draftEndRegex.Match(line) {
+		w.inDraft = false
+		return
+	}
+	match := bufferSizeRegex.FindSubmatch(line)
+	if match == nil {
+		return
+	}
+	mib, err := strconv.ParseFloat(string(match[4]), 64)
+	if err != nil {
+		return
+	}
+	if w.buffers == nil {
+		w.buffers = make(map[memoryBufferKey]memoryBuffer)
+	}
+	key := memoryBufferKey{
+		component: string(match[1]),
+		backend:   string(match[2]),
+		kind:      string(match[3]),
+		draft:     w.inDraft,
+	}
+	buffer := memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
+	// After loading, both contexts re-reserve their compute buffers without
+	// saying which one is speaking. A size the draft already holds, and the
+	// target does not, is the draft's.
+	if !key.draft {
+		draftKey := key
+		draftKey.draft = true
+		if held, ok := w.buffers[draftKey]; ok && held == buffer && w.buffers[key] != buffer {
+			key = draftKey
+		}
+	}
+	w.buffers[key] = buffer
+	w.updateRunnerMemoryLocked()
+}
+
+// resetLocked forgets everything parsed, for a llama-server started again.
+func (w *memoryParsingWriter) resetLocked() {
+	w.buffers = nil
+	w.pending = nil
+	w.inDraft = false
 }
 
 func (w *memoryParsingWriter) updateRunnerMemoryLocked() {
