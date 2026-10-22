@@ -2,6 +2,22 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**`ollama ps` reports a model's real size again.** Ollama works out how much
+memory a loaded model uses by reading the buffer sizes llama-server prints as
+it loads. Two things threw that count off. A line could arrive in two pieces,
+because llama-server's output is read in chunks that do not end at line ends,
+and a line that arrived in two pieces was not counted at all. And with a
+speculative draft (an MTP model, or a separate draft model), the draft's
+buffers carry the same names as the main model's, so they replaced them
+instead of adding to them. A Qwen3.5 9B Q6_K with an MTP draft, fully on the
+GPU, showed as 0.37 GB, then 0.88 GB after its first request; it now shows
+9.93 GB, the size llama-server itself projects. The scheduler places models
+by this number, so a model that looked small could be given room it did not
+have. This build changes only the Go binary: its runtime archives are the
+ones from `0.40.6-thinkbudget`.
+
+**Also in this build, from the 0.40.6 series:**
+
 **Rebased onto Ollama `v0.40.6`, with llama.cpp `b11669`** (was `v0.40.4` and
 `b11521`; `v0.40.5` is skipped). Every carried patch applies to the new base
 with the same changes it made before. Upstream moved MLX to `bebd6422`;
