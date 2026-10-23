@@ -2,6 +2,20 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**A thinking budget works again on models whose template opens the thinking
+block.** Many templates, qwen3's and gemma4's among them, end the prompt with
+the opening `<think>` tag, so the model never writes that tag itself. Ollama
+tells llama-server where the thinking block starts so the budget can start
+counting there, and llama.cpp `b11669` stopped reading that part of the
+request. From `0.40.6-thinkbudget` through `0.40.9-thinkbudget`, a
+`think_budget` on such a model was reported in the response but never
+enforced: the model thought until it ran out of output tokens, often with no
+answer. This build carries a llama.cpp patch that reads it again. The runtime
+archives are rebuilt for it, so the ones from `0.40.9-thinkbudget` do not
+match this build; the MLX archives are unchanged.
+
+## Also in this build, from 0.40.9-thinkbudget
+
 **Rebased onto Ollama `v0.40.9`, with llama.cpp `b11803`** (was `v0.40.6` and
 `b11669`; `v0.40.7` and `v0.40.8` are skipped). Every carried patch applies to
 the new base with the same changes it made before. Two needed porting onto
