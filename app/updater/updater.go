@@ -4,33 +4,37 @@ package updater
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ollama/ollama/app/store"
-	"github.com/ollama/ollama/app/version"
-	"github.com/ollama/ollama/auth"
 )
 
 var (
-	UpdateCheckURLBase      = "https://ollama.com/api/update"
+	// Where this build looks for its own updates.
+	//
+	// Upstream points at ollama.com, which serves the official releases and
+	// knows nothing about this series. That is not a harmless mismatch: the
+	// reply names a stock installer, the app runs it, and the binary carrying
+	// the feature is replaced by one without it. Measured on eleven2go
+	// 2026-09-10 -- the check offered v0.34.0 hourly from 09:10, the installer
+	// ran at 12:12, and the server it left behind did not start at all.
+	//
+	// Setting this to the empty string turns update checks off entirely, which
+	// is the setting for a machine that must never move on its own.
+	UpdateCheckURLBase      = "https://api.github.com/repos/mann1x/ollama/releases?per_page=20"
 	UpdateDownloaded        = false
 	UpdateCheckInterval     = 60 * 60 * time.Second
 	UpdateCheckInitialDelay = 3 * time.Second // 30 * time.Second
@@ -50,88 +54,16 @@ type UpdateResponse struct {
 	UpdateVersion string `json:"version"`
 }
 
+// Whether a newer release of this build's own series is available.
+//
+// Upstream asks ollama.com, which serves the official releases. A
+// thinking-budget build that took one would replace itself with a binary that
+// does not have the feature -- measured on eleven2go 2026-09-10, where the
+// check offered v0.34.0 from 09:10, the installer ran at 12:12, and the server
+// it left behind did not start at all. So this build asks the fork it is
+// released from instead; see fork.go for what it accepts from the answer.
 func (u *Updater) checkForUpdate(ctx context.Context) (bool, UpdateResponse) {
-	var updateResp UpdateResponse
-
-	requestURL, err := url.Parse(UpdateCheckURLBase)
-	if err != nil {
-		return false, updateResp
-	}
-
-	query := requestURL.Query()
-	query.Add("os", runtime.GOOS)
-	query.Add("arch", runtime.GOARCH)
-	currentVersion := version.Version
-	query.Add("version", currentVersion)
-	query.Add("ts", strconv.FormatInt(time.Now().Unix(), 10))
-
-	// The original macOS app used to use the device ID
-	// to check for updates so include it if present
-	if runtime.GOOS == "darwin" {
-		if id, err := u.Store.ID(); err == nil && id != "" {
-			query.Add("id", id)
-		}
-	}
-
-	var signature string
-
-	nonce, err := auth.NewNonce(rand.Reader, 16)
-	if err != nil {
-		// Don't sign if we haven't yet generated a key pair for the server
-		slog.Debug("unable to generate nonce for update check request", "error", err)
-	} else {
-		query.Add("nonce", nonce)
-		requestURL.RawQuery = query.Encode()
-
-		data := []byte(fmt.Sprintf("%s,%s", http.MethodGet, requestURL.RequestURI()))
-		signature, err = auth.Sign(ctx, data)
-		if err != nil {
-			slog.Debug("unable to generate signature for update check request", "error", err)
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("failed to check for update: %s", err))
-		return false, updateResp
-	}
-	if signature != "" {
-		req.Header.Set("Authorization", signature)
-	}
-	ua := fmt.Sprintf("ollama/%s %s Go/%s %s", version.Version, runtime.GOARCH, runtime.Version(), UserAgentOS)
-	req.Header.Set("User-Agent", ua)
-
-	slog.Debug("checking for available update", "requestURL", requestURL, "User-Agent", ua)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("failed to check for update: %s", err))
-		return false, updateResp
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent {
-		slog.Debug("check update response 204 (current version is up to date)")
-		return false, updateResp
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("failed to read body response: %s", err))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Info(fmt.Sprintf("check update error %d - %.96s", resp.StatusCode, string(body)))
-		return false, updateResp
-	}
-	err = json.Unmarshal(body, &updateResp)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("malformed response checking for update: %s", err))
-		return false, updateResp
-	}
-	// Extract the version string from the URL in the github release artifact path
-	updateResp.UpdateVersion = path.Base(path.Dir(updateResp.UpdateURL))
-
-	slog.Info("New update available at " + updateResp.UpdateURL)
-	return true, updateResp
+	return checkForUpdateFromFork(ctx)
 }
 
 func (u *Updater) DownloadNewRelease(ctx context.Context, updateResp UpdateResponse) error {

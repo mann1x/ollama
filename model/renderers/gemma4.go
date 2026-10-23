@@ -15,6 +15,9 @@ import (
 type Gemma4Renderer struct {
 	useImgTags          bool
 	emptyBlockOnNothink bool
+	// Render assistant content before its tool calls instead of after the
+	// tool responses.
+	contentBeforeToolCalls bool
 }
 
 const (
@@ -92,6 +95,19 @@ func (r *Gemma4Renderer) Render(messages []api.Message, tools []api.Tool, thinkV
 			sb.WriteString("<|channel>thought\n")
 			sb.WriteString(message.Thinking)
 			sb.WriteString("\n<channel|>")
+		} else if message.Role == "assistant" && r.emptyBlockOnNothink && !hasThink && !continueSameModelTurn && i > lastUserIdx {
+			// The empty thought channel the generation prompt opened this model
+			// turn with, rendered back as it was generated. Without it the next
+			// request's prompt diverges inside the turn and the cache re-reads
+			// it. Only where this message opened a model turn: a step that
+			// continues after a tool response was generated without one.
+			sb.WriteString("<|channel>thought\n<channel|>")
+		}
+
+		contentFirst := r.contentBeforeToolCalls && role == "model" && len(message.ToolCalls) > 0
+		messageHadContent := false
+		if contentFirst {
+			messageHadContent = r.renderMessageContent(&sb, message, role, &imageOffset)
 		}
 
 		if len(message.ToolCalls) > 0 {
@@ -111,18 +127,8 @@ func (r *Gemma4Renderer) Render(messages []api.Message, tools []api.Tool, thinkV
 			}
 		}
 
-		messageHadContent := false
-		switch role {
-		case "model":
-			if message.Content != "" || len(message.Images) > 0 {
-				message.Content = stripThinking(message.Content)
-				r.renderContent(&sb, message, &imageOffset, false)
-				messageHadContent = r.messageHasContent(message)
-			}
-		default:
-			r.renderContent(&sb, message, &imageOffset, true)
-			message.Content = strings.TrimSpace(message.Content)
-			messageHadContent = r.messageHasContent(message)
+		if !contentFirst {
+			messageHadContent = r.renderMessageContent(&sb, message, role, &imageOffset)
 		}
 
 		nextNonToolRole := r.nextNonToolRole(loopMessages, i)
@@ -167,6 +173,22 @@ func stripThinking(text string) string {
 		text = text[start+end+len("<channel|>"):]
 	}
 	return strings.TrimSpace(result.String())
+}
+
+// renderMessageContent writes a message's content and reports whether it had any.
+func (r *Gemma4Renderer) renderMessageContent(sb *strings.Builder, message api.Message, role string, imageOffset *int) bool {
+	if role == "model" {
+		if message.Content == "" && len(message.Images) == 0 {
+			return false
+		}
+		message.Content = stripThinking(message.Content)
+		r.renderContent(sb, message, imageOffset, false)
+		return r.messageHasContent(message)
+	}
+
+	r.renderContent(sb, message, imageOffset, true)
+	message.Content = strings.TrimSpace(message.Content)
+	return r.messageHasContent(message)
 }
 
 // renderContent writes a message's content, interleaving [img-N] tags for images.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -3204,6 +3205,104 @@ func TestMemoryParsingWriter(t *testing.T) {
 	}
 }
 
+// A Qwen3.5 9B Q6_K with an MTP draft, fully on an RTX 5080, as llama-server
+// logged it (pandorum, v0.40.4-thinkbudget). /api/ps reported 373 MiB, then
+// 905 MiB after the first request.
+const mtpDraftLoadLog = `common_params_fit_impl: projected to use 10167 MiB of device memory vs. 14783 MiB of free device memory
+llama_prepare_model_devices: using device CUDA0 (NVIDIA GeForce RTX 5080) (0000:2b:00.0) - 14985 MiB free
+load_tensors: offloaded 34/34 layers to GPU
+load_tensors:        CUDA0 model buffer size =  6402.57 MiB
+load_tensors:    CUDA_Host model buffer size =   795.70 MiB
+llama_context: constructing llama_context
+llama_context: n_ctx                 = 131072
+llama_context:  CUDA_Host  output buffer size =     0.95 MiB
+llama_kv_cache:      CUDA0 KV buffer size =  2176.00 MiB
+llama_kv_cache: size = 2176.00 MiB (131072 cells,   8 layers,  1/1 seqs), K (q8_0): 1088.00 MiB, V (q8_0): 1088.00 MiB
+llama_memory_recurrent:      CUDA0 RS buffer size =   201.00 MiB
+sched_reserve: reserving ...
+sched_reserve:      CUDA0 compute buffer size =   704.29 MiB
+sched_reserve:  CUDA_Host compute buffer size =   160.29 MiB
+common_speculative_init_result: creating MTP draft context against the target model 'J:\ollama_models\blobs\sha256-c94d907c'
+llama_context: constructing llama_context
+llama_context:  CUDA_Host  output buffer size =     0.95 MiB
+llama_kv_cache:      CUDA0 KV buffer size =   512.00 MiB
+sched_reserve: reserving ...
+sched_reserve:      CUDA0 compute buffer size =   172.02 MiB
+sched_reserve:  CUDA_Host compute buffer size =   144.02 MiB
+srv    load_model: initializing, n_slots = 1, n_ctx_slot = 131072, kv_unified = 'false'
+spec common_specu: adding speculative implementation 'draft-mtp'
+sched_reserve: reserving ...
+sched_reserve:      CUDA0 compute buffer size =   172.02 MiB
+sched_reserve:  CUDA_Host compute buffer size =   144.02 MiB
+srv    load_model: speculative decoding context initialized
+srv  llama_server: model loaded
+slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)
+sched_reserve: reserving ...
+sched_reserve:      CUDA0 compute buffer size =   704.29 MiB
+sched_reserve:  CUDA_Host compute buffer size =   160.29 MiB
+`
+
+func TestMemoryParsingWriterCountsSplitLinesAndTheDraft(t *testing.T) {
+	// llama-server's own projection, and the sum of every CUDA0 line above:
+	// target model, KV, RS and compute, then the draft's KV and compute.
+	wantGPU := 6402.57 + 2176 + 201 + 704.29 + 512 + 172.02
+	wantTotal := wantGPU + 795.70 + 0.95 + 160.29 + 0.95 + 144.02
+	mib := func(v uint64) float64 { return float64(v) / (1024 * 1024) }
+
+	// A pipe read ends wherever the pipe had data, so every chunk size is a
+	// way llama-server's output can arrive.
+	for _, size := range []int{1, 2, 3, 7, 13, 64, 100, 511, 4096, len(mtpDraftLoadLog)} {
+		t.Run(fmt.Sprintf("chunks of %d", size), func(t *testing.T) {
+			runner := &llamaServerRunner{
+				vramByDevice:     make(map[string]uint64),
+				systemFreeAtLoad: make(map[string]uint64),
+			}
+			w := &memoryParsingWriter{inner: io.Discard, runner: runner}
+			for log := []byte(mtpDraftLoadLog); len(log) > 0; {
+				n := min(size, len(log))
+				if _, err := w.Write(log[:n]); err != nil {
+					t.Fatal(err)
+				}
+				log = log[n:]
+			}
+
+			if got := mib(runner.memGPU); math.Abs(got-wantGPU) > 0.01 {
+				t.Errorf("memGPU = %.2f MiB, want %.2f", got, wantGPU)
+			}
+			if got := mib(runner.memTotal); math.Abs(got-wantTotal) > 0.01 {
+				t.Errorf("memTotal = %.2f MiB, want %.2f", got, wantTotal)
+			}
+			if got := mib(runner.vramByDevice["CUDA0"]); math.Abs(got-wantGPU) > 0.01 {
+				t.Errorf("vramByDevice[CUDA0] = %.2f MiB, want %.2f", got, wantGPU)
+			}
+			if runner.gpuLayers != 34 || runner.totalLayers != 34 {
+				t.Errorf("layers = %d/%d, want 34/34", runner.gpuLayers, runner.totalLayers)
+			}
+			if got := runner.systemFreeAtLoad["CUDA0"]; got != 14985*1024*1024 {
+				t.Errorf("systemFreeAtLoad[CUDA0] = %d, want 14985 MiB", got)
+			}
+		})
+	}
+}
+
+func TestResetLoadAccountingForgetsParsedBuffers(t *testing.T) {
+	runner := &llamaServerRunner{
+		vramByDevice:     make(map[string]uint64),
+		systemFreeAtLoad: make(map[string]uint64),
+	}
+	w := &memoryParsingWriter{inner: io.Discard, runner: runner}
+	runner.output = w
+
+	// The projector on the GPU, then a retry that put it on the CPU.
+	w.Write([]byte("clip_ctx:        CUDA0 model buffer size =   900.00 MiB\nload_tensors:        CUDA0 model buffer size =  1000.00 MiB\nload_tens"))
+	runner.resetLoadAccounting()
+	w.Write([]byte("load_tensors:        CUDA0 model buffer size =  1000.00 MiB\n"))
+
+	if got := runner.memGPU; got != 1000*1024*1024 {
+		t.Errorf("memGPU = %d MiB, want 1000", got/(1024*1024))
+	}
+}
+
 func TestMemoryParsingWriterRecordsOutputActivityWithoutNewline(t *testing.T) {
 	runner := &llamaServerRunner{}
 	w := &memoryParsingWriter{inner: io.Discard, runner: runner}
@@ -3784,6 +3883,106 @@ func TestLlamaServerChatTemplateKwargs(t *testing.T) {
 	}
 }
 
+func TestLlamaServerChatRequestThinkBudget(t *testing.T) {
+	// llama-server owns the template on the chat path, so the budget in the
+	// body is the only thing bounding thinking there. It comes from
+	// think_budget alone: a level in think is the model's control.
+	tests := []struct {
+		name        string
+		numCtx      int
+		numPredict  int
+		think       *api.ThinkValue
+		thinkBudget *api.ThinkBudget
+		want        any
+	}{
+		{
+			name:        "a share resolves against the context length",
+			numCtx:      32768,
+			think:       &api.ThinkValue{Value: true},
+			thinkBudget: &api.ThinkBudget{Value: "medium"},
+			want:        8192,
+		},
+		{
+			// a share leaves room to answer, so a capped response is the
+			// window it is taken of
+			name:        "a share resolves against num_predict when the request caps the response",
+			numCtx:      128000,
+			numPredict:  32000,
+			think:       &api.ThinkValue{Value: true},
+			thinkBudget: &api.ThinkBudget{Value: "medium"},
+			want:        8000,
+		},
+		{
+			name:        "a share resolves against the context when num_predict is past it",
+			numCtx:      32768,
+			numPredict:  128000,
+			thinkBudget: &api.ThinkBudget{Value: "medium"},
+			want:        8192,
+		},
+		{
+			name:        "a share resolves against the context when num_predict is unlimited",
+			numCtx:      32768,
+			numPredict:  -1,
+			thinkBudget: &api.ThinkBudget{Value: "medium"},
+			want:        8192,
+		},
+		{
+			name:        "a token count ignores num_predict",
+			numCtx:      128000,
+			numPredict:  32000,
+			think:       &api.ThinkValue{Value: true},
+			thinkBudget: &api.ThinkBudget{Value: 16000},
+			want:        16000,
+		},
+		{
+			name:   "a level is not a budget",
+			numCtx: 32768,
+			think:  &api.ThinkValue{Value: "medium"},
+		},
+		{
+			name:        "a level leaves the budget as it was set",
+			numCtx:      32768,
+			think:       &api.ThinkValue{Value: "high"},
+			thinkBudget: &api.ThinkBudget{Value: 2000},
+			want:        2000,
+		},
+		{
+			name:        "thinking off is not bounded",
+			numCtx:      32768,
+			think:       &api.ThinkValue{Value: false},
+			thinkBudget: &api.ThinkBudget{Value: "max"},
+		},
+		{
+			name:   "think true stays unrestricted",
+			numCtx: 32768,
+			think:  &api.ThinkValue{Value: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &llamaServerRunner{options: api.Options{Runner: api.Runner{NumCtx: tt.numCtx}}}
+
+			opts := api.DefaultOptions()
+			opts.NumCtx = tt.numCtx
+			opts.NumPredict = tt.numPredict
+			opts.ThinkBudget = tt.thinkBudget
+
+			body, err := s.llamaServerChatRequest(ChatRequest{
+				Messages: []api.Message{{Role: "user", Content: "hi"}},
+				Options:  &opts,
+				Think:    tt.think,
+			}, false)
+			if err != nil {
+				t.Fatalf("llamaServerChatRequest error: %v", err)
+			}
+			if got := body["thinking_budget_tokens"]; got != tt.want {
+				t.Fatalf("thinking_budget_tokens = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLlamaServerChatMessageConvertsToolCalls(t *testing.T) {
 	args := api.NewToolCallFunctionArguments()
 	args.Set("command", "ls")
@@ -4033,5 +4232,266 @@ func TestLlamaServerCompletionThinkingFormat(t *testing.T) {
 	}
 	if got := conversions.Load(); got != 1 {
 		t.Errorf("json format converted a schema, %d conversions", got)
+	}
+}
+
+func TestLlamaServerCompletionReasoningBudget(t *testing.T) {
+	tests := []struct {
+		name                 string
+		req                  CompletionRequest
+		wantBudget           any
+		wantStart            any
+		wantEnd              any
+		wantMessage          any
+		wantScope            any
+		wantResetTag         any
+		wantGenerationPrompt any
+	}{
+		{
+			name: "budget with model-emitted opening tag",
+			req: CompletionRequest{
+				Prompt:           "<bos><|turn>user\nhi<turn|>\n<|turn>model\n",
+				ThinkBudget:      512,
+				ThinkingStartTag: "<|channel>",
+				ThinkingEndTag:   "<channel|>",
+			},
+			wantBudget:  float64(512),
+			wantScope:   "response",
+			wantStart:   "<|channel>",
+			wantEnd:     "<channel|>",
+			wantMessage: "",
+		},
+		{
+			name: "primed thinking block is replayed as the generation prompt",
+			req: CompletionRequest{
+				Prompt:           "<|im_start|>assistant\n<think>\n",
+				ThinkBudget:      512,
+				ThinkingStartTag: "<think>",
+				ThinkingEndTag:   "</think>",
+			},
+			wantBudget:           float64(512),
+			wantScope:            "response",
+			wantStart:            "<think>",
+			wantEnd:              "</think>",
+			wantMessage:          "",
+			wantGenerationPrompt: "<think>\n",
+		},
+		{
+			// gemma4 primes the block with a channel name after a tool
+			// response, so the prompt ends past the opening tag rather than
+			// with it
+			name: "primed block is replayed past the opening tag",
+			req: CompletionRequest{
+				Prompt:           "<|tool_response>12:00<turn|>\n<|channel>thought\n",
+				ThinkBudget:      512,
+				ThinkingStartTag: "<|channel>",
+				ThinkingEndTag:   "<channel|>",
+			},
+			wantBudget:           float64(512),
+			wantScope:            "response",
+			wantStart:            "<|channel>",
+			wantEnd:              "<channel|>",
+			wantMessage:          "",
+			wantGenerationPrompt: "<|channel>thought\n",
+		},
+		{
+			name: "closed thinking block is not replayed",
+			req: CompletionRequest{
+				Prompt:           "<|turn>model\n<|channel>thought\nhm<channel|>done<turn|>\n<|turn>model\n",
+				ThinkBudget:      512,
+				ThinkingStartTag: "<|channel>",
+				ThinkingEndTag:   "<channel|>",
+			},
+			wantBudget:  float64(512),
+			wantScope:   "response",
+			wantStart:   "<|channel>",
+			wantEnd:     "<channel|>",
+			wantMessage: "",
+		},
+		{
+			// an opening tag this far from the end came from message content,
+			// not from the template priming the turn
+			name: "opening tag inside message content is not replayed",
+			req: CompletionRequest{
+				Prompt:           "<|im_start|>user\nwhy does <think> not close in this quoted example I pasted<|im_end|>\n<|im_start|>assistant\n",
+				ThinkBudget:      512,
+				ThinkingStartTag: "<think>",
+				ThinkingEndTag:   "</think>",
+			},
+			wantBudget:  float64(512),
+			wantScope:   "response",
+			wantStart:   "<think>",
+			wantEnd:     "</think>",
+			wantMessage: "",
+		},
+		{
+			name: "wrap-up message is forced ahead of the closing tag",
+			req: CompletionRequest{
+				Prompt:             "<bos><|turn>user\nhi<turn|>\n<|turn>model\n",
+				ThinkBudget:        512,
+				ThinkBudgetMessage: "\n\nTime to answer now.\n",
+				ThinkingStartTag:   "<|channel>",
+				ThinkingEndTag:     "<channel|>",
+			},
+			wantBudget:  float64(512),
+			wantScope:   "response",
+			wantStart:   "<|channel>",
+			wantEnd:     "<channel|>",
+			wantMessage: "\n\nTime to answer now.\n",
+		},
+		{
+			// the budget bounds the whole response, and a tool call forgives
+			// what the thinking before it spent
+			name: "tool call tag rides along as the budget reset",
+			req: CompletionRequest{
+				Prompt:              "<bos><|turn>user\nhi<turn|>\n<|turn>model\n",
+				ThinkBudget:         512,
+				ThinkingStartTag:    "<|channel>",
+				ThinkingEndTag:      "<channel|>",
+				ThinkBudgetResetTag: "<|tool_call>",
+			},
+			wantBudget:   float64(512),
+			wantStart:    "<|channel>",
+			wantEnd:      "<channel|>",
+			wantMessage:  "",
+			wantScope:    "response",
+			wantResetTag: "<|tool_call>",
+		},
+		{
+			name: "no budget",
+			req: CompletionRequest{
+				Prompt:             "test prompt",
+				ThinkBudgetMessage: "ignored without a budget",
+				ThinkingStartTag:   "<think>",
+				ThinkingEndTag:     "</think>",
+			},
+		},
+		{
+			name: "budget without tags is not enforceable",
+			req: CompletionRequest{
+				Prompt:      "test prompt",
+				ThinkBudget: 512,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var completionBody map[string]any
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/health":
+					fmt.Fprint(w, `{"status":"ok"}`)
+				case "/completion":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("reading completion request body: %v", err)
+						return
+					}
+					if err := json.Unmarshal(body, &completionBody); err != nil {
+						t.Errorf("invalid completion request body %q: %v", body, err)
+						return
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					fmt.Fprintln(w, `data: {"content":"","stop":true}`)
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			parts := strings.Split(srv.URL, ":")
+			var portInt int
+			fmt.Sscanf(parts[len(parts)-1], "%d", &portInt)
+
+			runner := &llamaServerRunner{
+				port:    portInt,
+				cmd:     fakeRunningCmd(),
+				sem:     semaphore.NewWeighted(1),
+				options: api.Options{Runner: api.Runner{NumCtx: 2048}},
+			}
+
+			opts := api.DefaultOptions()
+			req := tt.req
+			req.Options = &opts
+			if err := runner.Completion(t.Context(), req, func(CompletionResponse) {}); err != nil {
+				t.Fatalf("Completion error: %v", err)
+			}
+
+			// a nil want means the field must not reach the wire at all
+			checks := []struct {
+				field string
+				want  any
+			}{
+				{"reasoning_budget_tokens", tt.wantBudget},
+				{"reasoning_budget_start_tag", tt.wantStart},
+				{"reasoning_budget_end_tag", tt.wantEnd},
+				// llama-server builds the sequence it forces from
+				// message+end_tag, and only when this field is present, so an
+				// empty message still has to reach the wire
+				{"reasoning_budget_message", tt.wantMessage},
+				{"reasoning_budget_scope", tt.wantScope},
+				{"reasoning_budget_reset_tag", tt.wantResetTag},
+				{"generation_prompt", tt.wantGenerationPrompt},
+			}
+
+			for _, check := range checks {
+				field, want := check.field, check.want
+				got, ok := completionBody[field]
+				if want == nil {
+					if ok {
+						t.Errorf("%s = %v, want it omitted", field, got)
+					}
+					continue
+				}
+				if !ok {
+					t.Errorf("%s missing from llama-server completion request", field)
+					continue
+				}
+				if got != want {
+					t.Errorf("%s = %v, want %v", field, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLlamaServerChatMessageCarriesThinking(t *testing.T) {
+	msg, err := llamaServerChatMessage(Message{
+		Role:     "assistant",
+		Content:  "OK",
+		Thinking: "the secret number is 7413",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := msg["reasoning_content"]; got != "the secret number is 7413" {
+		t.Fatalf("reasoning_content = %#v, want the thinking to reach the template", got)
+	}
+	if got := msg["content"]; got != "OK" {
+		t.Fatalf("content = %#v, want the visible reply untouched", got)
+	}
+
+	// A message that never carried thinking must not gain an empty field: a
+	// template that only checks for presence would render a blank think block.
+	plain, err := llamaServerChatMessage(Message{Role: "assistant", Content: "OK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain["reasoning_content"]; ok {
+		t.Fatalf("reasoning_content present on a message with no thinking: %#v", plain)
+	}
+
+	// Reasoning belongs to the assistant: thinking left on any other message
+	// must not reach the template.
+	for _, role := range []string{"user", "tool", "system"} {
+		other, err := llamaServerChatMessage(Message{Role: role, Content: "OK", Thinking: "not mine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := other["reasoning_content"]; ok {
+			t.Fatalf("reasoning_content present on a %s message: %#v", role, other)
+		}
 	}
 }
