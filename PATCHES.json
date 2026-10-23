@@ -396,32 +396,6 @@
       "note": "Same rule as opencoti's engine-side bug-3541 check (structural, no schema): a string value ending in \",<name>:\" whose <name> is not a key of the same object. Rejected, never repaired. Merges cleanly onto think-budget with every other patch (cherry-pick 87a2f4c5); go test/vet ./model/parsers and go build ./... clean on both."
     },
     {
-      "slug": "up-compat-readme",
-      "branch": "up-compat-readme",
-      "sha": "3464ce0a",
-      "upstream_pr": null,
-      "rebased_onto": null,
-      "depends_on": [
-        "up-reasoning-budget-line-boundary",
-        "up-gemma4-assistant-shape"
-      ],
-      "base": {
-        "sha": "6ff25902",
-        "merge_of": [
-          "v0.40.9",
-          "up-reasoning-budget-line-boundary@ffea3884",
-          "up-gemma4-assistant-shape@a0005106"
-        ],
-        "note": "2026-10-23, v0.40.9: rebuilt from the tag as --no-ff merges of the dependencies at the shas above, in this order, then this branch's own commits cherry-picked (-x). Base-merge conflicts in files upstream left alone took the v0.40.6 base's file; model/parsers/parsers.go, which upstream changed (a 'flint' case, outside the conflicted hunk), is the v0.40.6 base's file plus upstream's hunk. The base's patch-set delta against v0.40.9 is line-for-line the v0.40.6 base's against v0.40.6, except the scheduleError line up-think-budget ports. | PREVIOUS: NOT the upstream tag: the text this patch writes is the union of the two dependencies' README entries, which exists on neither. The base merge keeps line-boundary's README (ada2a209) and leaves the union to the one commit on top. 2026-10-17, v0.40.6: rebuilt from the tag as --no-ff merges of the dependencies at the shas above, in this order; every conflict was a known_conflicts pair in a file upstream did not touch between v0.40.4 and v0.40.6, resolved to the previous base's file, and every file the base changes that upstream left alone is byte-identical to the previous base's. Then the branch's own commits cherry-picked (-x) without a conflict."
-      },
-      "files": [
-        "llama/compat/README.md"
-      ],
-      "title": "llama/compat: list both carried patches in the README",
-      "status": "fork-only",
-      "note": "Requested by xollama (#488): llama/compat/README.md = 3f1fcb62 (004's entry, then 005's) existed only as think-budget's resolution of the line-boundary/assistant-shape conflict, so check-compat-origin refused it and xollama kept ada2a209, which moved their compat digest off ours. After this branch the full apply order ends at README 3f1fcb62 and inputs digest 3023ebe12b5e, equal to think-budget. EXPECT ONE CONFLICT merging it: both dependencies are merge bases (criss-cross), so the virtual base already carries the README conflict, whatever the consumer resolved at assistant-shape. Resolution: take this branch's side; the result is byte-identical to this parent. up-response-scope-think-budget then merges clean. Drop this row when either dependency's README entry goes away."
-    },
-    {
       "slug": "up-response-scope-think-budget",
       "branch": "up-response-scope-think-budget",
       "sha": "63cfbc54",
@@ -583,6 +557,34 @@
       "title": "llama: accept generation_prompt on completion requests again",
       "status": "fork-only",
       "note": "2026-10-23. A llama.cpp patch, so it retires on a LLAMA_CPP_VERSION bump once the pin registers generation_prompt in tools/server/server-schema.cpp again (check: grep -c 'field_str(\"generation_prompt\")' in the fetched tree is 1 without 006). A template that primes thinking ends the prompt with the opening tag; llm/llama_server.go sends that tail as generation_prompt (98d344a7d) and llama-server replays it into the reasoning budget sampler. b11521 registered the field, b11669 dropped it, so from v0.40.6-thinkbudget through v0.40.9-thinkbudget a think_budget on qwen3, gemma4 or any other priming template was echoed in the response and never enforced. Found by the v0.40.9 smoke generation on pandorum and eleven2go (qwen3:4b, budget 64: thinking to num_predict, no answer). Verified: the /completion body Ollama sends, captured off loopback, is inert on b11669 and b11803 and activates, closes at a line boundary and answers on b11803+006; without the field the patched build stays inert. test-reasoning-budget cannot see this: it never goes through the request schema."
+    },
+    {
+      "slug": "up-compat-readme",
+      "branch": "up-compat-readme",
+      "sha": "a306f873",
+      "upstream_pr": null,
+      "rebased_onto": null,
+      "depends_on": [
+        "up-reasoning-budget-line-boundary",
+        "up-gemma4-assistant-shape",
+        "up-completion-generation-prompt"
+      ],
+      "base": {
+        "sha": "6ff25902",
+        "merge_of": [
+          "v0.40.9",
+          "up-reasoning-budget-line-boundary@ffea3884",
+          "up-gemma4-assistant-shape@a0005106"
+        ],
+        "note": "2026-10-23, v0.40.9: rebuilt from the tag as --no-ff merges of the dependencies at the shas above, in this order, then this branch's own commits cherry-picked (-x). Base-merge conflicts in files upstream left alone took the v0.40.6 base's file; model/parsers/parsers.go, which upstream changed (a 'flint' case, outside the conflicted hunk), is the v0.40.6 base's file plus upstream's hunk. The base's patch-set delta against v0.40.9 is line-for-line the v0.40.6 base's against v0.40.6, except the scheduleError line up-think-budget ports. | PREVIOUS: NOT the upstream tag: the text this patch writes is the union of the two dependencies' README entries, which exists on neither. The base merge keeps line-boundary's README (ada2a209) and leaves the union to the one commit on top. 2026-10-17, v0.40.6: rebuilt from the tag as --no-ff merges of the dependencies at the shas above, in this order; every conflict was a known_conflicts pair in a file upstream did not touch between v0.40.4 and v0.40.6, resolved to the previous base's file, and every file the base changes that upstream left alone is byte-identical to the previous base's. Then the branch's own commits cherry-picked (-x) without a conflict."
+      },
+      "files": [
+        "llama/compat/README.md",
+        "llama/compat/006-completion-generation-prompt.patch"
+      ],
+      "title": "llama/compat: list every carried patch in the README",
+      "status": "fork-only",
+      "note": "Carries llama/compat/README.md = 56c6eaf4 (001, 004, 005, 006 in apply order), think-budget's README byte for byte, so check-compat-origin sees the whole list arrive from one fork commit. 2026-10-23: a306f873 merges up-completion-generation-prompt@d2d1694d on top of 3464ce0a (fast-forward; nothing moved), and the entry moved to the end of patches[], after that branch: xollama's v0.40.9 merges of assistant-shape and completion-generation-prompt had each combined the two sides' README entries, which the gate refuses (xo-35). CONSUMER RULE: at every README conflict before this branch, keep HEAD's README (ada2a209 after line-boundary); this branch's merge, last, takes its own side (56c6eaf4). Replayed from v0.40.9 (line-boundary, assistant-shape, completion-generation-prompt, this): every merge's README equals one of its parents', and the end is 56c6eaf4. Drop this row when any listed entry goes away. | PREVIOUS: Requested by xollama (#488): llama/compat/README.md = 3f1fcb62 (004's entry, then 005's) existed only as think-budget's resolution of the line-boundary/assistant-shape conflict, so check-compat-origin refused it and xollama kept ada2a209, which moved their compat digest off ours. After this branch the full apply order ends at README 3f1fcb62 and inputs digest 3023ebe12b5e, equal to think-budget. EXPECT ONE CONFLICT merging it: both dependencies are merge bases (criss-cross), so the virtual base already carries the README conflict, whatever the consumer resolved at assistant-shape. Resolution: take this branch's side; the result is byte-identical to this parent. up-response-scope-think-budget then merges clean. Drop this row when either dependency's README entry goes away."
     }
   ],
   "known_conflicts": [
@@ -620,7 +622,7 @@
       ],
       "file": "llama/compat/README.md",
       "order_independent": true,
-      "resolution": "both add a Files entry after 001's (v0.34.4 dropped the stale 002 entry and the models/ paragraph). Keep both, 004's entry first, so the list reads in apply order."
+      "resolution": "Keep HEAD's README (line-boundary's, ada2a209). The full list arrives from up-compat-readme, merged last; a union here is a README no fork commit has, and check-compat-origin refuses it. | PREVIOUS: both add a Files entry after 001's (v0.34.4 dropped the stale 002 entry and the models/ paragraph). Keep both, 004's entry first, so the list reads in apply order."
     },
     {
       "between": [
@@ -638,7 +640,7 @@
       ],
       "file": "llama/compat/README.md",
       "order_independent": false,
-      "resolution": "criss-cross: the merge bases are both dependencies, whose README edits conflict inside the virtual base. Take up-compat-readme's side (3f1fcb62), which is byte-identical to that merge parent. Seen whether the earlier assistant-shape conflict was resolved to ada2a209 (xollama) or to the union (the replay; there it merges clean)."
+      "resolution": "up-compat-readme is merged last (after up-completion-generation-prompt). Take its side (56c6eaf4), byte-identical to that merge parent. | PREVIOUS: criss-cross: the merge bases are both dependencies, whose README edits conflict inside the virtual base. Take up-compat-readme's side (3f1fcb62), which is byte-identical to that merge parent. Seen whether the earlier assistant-shape conflict was resolved to ada2a209 (xollama) or to the union (the replay; there it merges clean)."
     },
     {
       "between": [
@@ -656,7 +658,7 @@
       ],
       "file": "llama/compat/README.md",
       "order_independent": true,
-      "resolution": "both add a Files entry after 001's. Keep both, 004 then 005 then 006, in numeric order."
+      "resolution": "Keep HEAD's README (ada2a209). The full list (004, 005, 006) arrives from up-compat-readme, merged next. | PREVIOUS: both add a Files entry after 001's. Keep both, 004 then 005 then 006, in numeric order."
     }
   ]
 }
