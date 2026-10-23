@@ -289,6 +289,9 @@ jobs:
             if (-not (Select-String -Path $rb -Pattern $needle -Quiet)) { throw "compat patch did not bring $needle into $rb" }
             Write-Output "patch applied: $needle present"
           }
+          $schema = 'build/llama-server-cpu/_deps/llama_cpp-src/tools/server/server-schema.cpp'
+          if (-not (Select-String -Path $schema -Pattern 'field_str("generation_prompt")' -SimpleMatch -Quiet)) { throw "compat patch 006 did not bring generation_prompt into $schema" }
+          Write-Output "patch applied: generation_prompt field present"
 
           & cmake --build build/llama-server-cpu --parallel 4
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
@@ -352,6 +355,9 @@ jobs:
               grep -q "$needle" "$rb" || { echo "compat patch did not bring $needle into $rb"; exit 1; }
               echo "patch applied: $needle present"
             done
+            schema=build/llama-server-cpu/_deps/llama_cpp-src/tools/server/server-schema.cpp
+            grep -qF "field_str(\"generation_prompt\")" "$schema" || { echo "compat patch 006 did not bring generation_prompt into $schema"; exit 1; }
+            echo "patch applied: generation_prompt field present"
 
             cmake --build build/llama-server-cpu --parallel "$(nproc)"
             cmake --install build/llama-server-cpu --component llama-server --strip
@@ -526,6 +532,9 @@ jobs:
               grep -q "$needle" "$rb" || { echo "compat patch did not bring $needle into $rb"; exit 1; }
               echo "patch applied: $needle present"
             done
+            schema=build/llama-server-cpu/_deps/llama_cpp-src/tools/server/server-schema.cpp
+            grep -qF "field_str(\"generation_prompt\")" "$schema" || { echo "compat patch 006 did not bring generation_prompt into $schema"; exit 1; }
+            echo "patch applied: generation_prompt field present"
 
             cmake --build build/llama-server-cpu --parallel "$(nproc)"
             cmake --install build/llama-server-cpu --component llama-server --strip
