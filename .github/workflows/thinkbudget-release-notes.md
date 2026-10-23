@@ -2,6 +2,36 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.9`, with llama.cpp `b11803`** (was `v0.40.6` and
+`b11669`; `v0.40.7` and `v0.40.8` are skipped). Every carried patch applies to
+the new base with the same changes it made before. Two needed porting onto
+upstream's own changes: the 400 for an unreadable `think_budget` now sits in
+the error mapping upstream split out of the request handlers, and one test was
+updated for a scheduler field upstream made atomic. The runtime archives are
+rebuilt for the new llama.cpp; the ones from `0.40.6-thinkbudget` do not match
+this build.
+
+**Thinking goes to the chat template only on assistant turns.** On models run
+through llama-server's own chat template, a message's thinking was passed to
+the template whatever its role. Only an assistant turn carries reasoning, but
+a client can leave thinking on a user or tool message (the OpenAI-compatible
+endpoint maps `reasoning` on any message into it), and a template that does
+not check the role itself would then render it. Ollama's own renderers already
+wrote thinking for assistant turns only; this path now does the same.
+
+**The MLX archives no longer carry the CUDA libraries Ollama shares with
+llama.cpp.** From 0.40.9, upstream keeps one copy of cuBLAS, cuBLASLt, the CUDA
+runtime, NVRTC and nvJitLink, in the main archive's `lib/ollama/cuda_v13`, and
+MLX loads them from there. The MLX archives on this release are upstream's
+0.40.9 files, unchanged, so they need that folder next to them: extract them
+over an Ollama 0.40.9 install, whose `cuda_v13` has those libraries. On
+Windows, upstream's `mlx.dll` is now built to find cuDNN next to itself and
+CUDA in `../cuda_v13`, instead of in the folders upstream's build machine had
+them in, so this release has no `-reldir` zip: use
+`ollama-windows-amd64-mlx.zip`.
+
+**Also in this build, from the 0.40.6 series:**
+
 **`ollama ps` reports a model's real size again.** Ollama works out how much
 memory a loaded model uses by reading the buffer sizes llama-server prints as
 it loads. Two things threw that count off. A line could arrive in two pieces,
@@ -13,10 +43,7 @@ instead of adding to them. A Qwen3.5 9B Q6_K with an MTP draft, fully on the
 GPU, showed as 0.37 GB, then 0.88 GB after its first request; it now shows
 9.93 GB, the size llama-server itself projects. The scheduler places models
 by this number, so a model that looked small could be given room it did not
-have. This build changes only the Go binary: its runtime archives are the
-ones from `0.40.6-thinkbudget`.
-
-**Also in this build, from the 0.40.6 series:**
+have.
 
 **Rebased onto Ollama `v0.40.6`, with llama.cpp `b11669`** (was `v0.40.4` and
 `b11521`; `v0.40.5` is skipped). Every carried patch applies to the new base
@@ -100,25 +127,16 @@ What changes for you:
 **MLX runtimes are on this release, for every platform**, with
 `mlx-runtime.txt` listing each file's sha256. Safetensors models run on MLX.
 `ollama-linux-amd64-mlx.tar.zst`, `ollama-windows-amd64-mlx.zip` and
-`ollama-darwin-mlx.tgz` are upstream's 0.40.4 bytes, unchanged.
-`ollama-windows-amd64-mlx-reldir.zip` is built here from the same MLX and
-CMake as upstream's, with one difference. Upstream's `mlx.dll` looks for cuDNN
-in `C:/Program Files/NVIDIA/CUDNN/bin/x64`, the folder its build machine had it
-in, and panics on the first generation that uses cuDNN on any machine without
-it there. Ours looks next to `mlx.dll`, where the zip puts the cuDNN and CUDA
-DLLs. On Windows, use the `-reldir` zip. Because MLX moved, it is rebuilt for
-this release and is added to it when that build finishes, a few hours after
-the other files.
+`ollama-darwin-mlx.tgz` are upstream's 0.40.9 bytes, unchanged.
 
-**Everything else is carried unchanged from `0.40.3-thinkbudget`**: the
-response-scoped reasoning budget, the line-boundary close, Gemma 4 E2B/E4B
-assistant drafters, the Modelfile round-trip fixes, and the Gemma 4, Qwen 3.5,
-LFM2 and qwen3-coder parser fixes. The full list, with every patch's branch and
-commit, is `PATCHES.json` on the `think-budget` branch: 25 patches on the
-`v0.40.4` tag.
+**Everything else is carried unchanged**: the response-scoped reasoning
+budget, the line-boundary close, Gemma 4 E2B/E4B assistant drafters, the
+Modelfile round-trip fixes, and the Gemma 4, Qwen 3.5, LFM2 and qwen3-coder
+parser fixes. The full list, with every patch's branch and commit, is
+`PATCHES.json` on the `think-budget` branch: 29 patches on the `v0.40.9` tag.
 
 `go test ./...` passes in full on this tree. The carried llama.cpp patches
-apply in full to a fresh `b11521` checkout, and llama.cpp's own
+apply in full to a fresh `b11803` checkout, and llama.cpp's own
 `test-reasoning-budget` passes against it.
 
 ## Updating (unchanged since 0.34.2)
