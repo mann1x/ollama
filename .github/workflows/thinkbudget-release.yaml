@@ -36,9 +36,9 @@ on:
         default: v0.34.0-thinkbudget
         required: true
       only:
-        description: "all: cut the release anew. arm64: add the Linux arm64 assets to the release that exists, leaving the others as they are. mlx-windows: build the Windows MLX runtime with relative CUDA/cuDNN folders and add it (use asset_suffix -reldir)"
+        description: "all: cut the release anew. arm64: add the Linux arm64 assets to the release that exists, leaving the others as they are."
         type: choice
-        options: [all, arm64, mlx-windows]
+        options: [all, arm64]
         default: all
       asset_suffix:
         description: "added to the names of the assets this run uploads (before the extension), e.g. -2630dba7: a rebuild goes beside the assets people pin, not over them"
@@ -475,8 +475,6 @@ jobs:
   # plain armv8-a and nothing is tuned to the runner's CPU.
   linux-arm64:
     needs: prepare
-    # Not on `only: mlx-windows`: a rebuild would move the sha256 people pin.
-    if: inputs.only == 'all' || inputs.only == 'arm64'
     runs-on: ubuntu-24.04-arm
     defaults:
       run:
@@ -578,178 +576,8 @@ jobs:
           sha256sum "$bin" "$rt"
           gh release upload "${{ inputs.tag }}" "$bin" "$rt" $CLOBBER
 
-  # Upstream's Windows MLX runtime, built here so it loads on a machine that
-  # does not have the CUDA toolkit and cuDNN installed where upstream's build
-  # machine had them.
-  #
-  # mlx.dll finds cuDNN, cuBLAS and NVRTC through two folders fixed at build
-  # time, MLX_CUDNN_BIN_DIR and MLX_CUDA_BIN_DIR (mlx/backend/cuda/dirs.cpp).
-  # Left unset, MLX's CMake fills in the build machine's own folders, and
-  # upstream's zip carries "C:/Program Files/NVIDIA/CUDNN/bin/x64": on any
-  # machine without cuDNN there, the first generation that touches cuDNN
-  # panics in load_cudnn()'s directory_iterator, and the request never
-  # answers (measured on eleven2go, qwen3.5:0.8b --runner mlx). The DLLs are
-  # in the zip all along, next to mlx.dll. A relative folder resolves from
-  # mlx.dll's own, so both are set to ".". The superbuild forwards every MLX_*
-  # cache variable to the MLX build, so upstream's CMake is used unchanged.
-  windows-mlx:
-    needs: prepare
-    # Its own dispatch (only: mlx-windows, asset_suffix: -reldir), never part of
-    # `all`: a full release republishes upstream's ollama-windows-amd64-mlx.zip
-    # under that name (scripts/thinkbudget-mlx-assets.sh), and this build next
-    # to it, so the two never share a name.
-    if: inputs.only == 'mlx-windows'
-    # windows-latest no longer carries VS 2022, and nvcc 13.0 takes no newer MSVC.
-    runs-on: windows-2022
-    timeout-minutes: 360
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      CUDA_INSTALLER: https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_windows.exe
-      CUDNN_ARCHIVE: https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.18.1.3_cuda13-archive.zip
-    steps:
-      # nvcc compiling MLX's kernels for every architecture runs past 16 GB.
-      - name: pagefile
-        uses: al-cheb/configure-pagefile-action@v1.5
-        with:
-          minimum-size: 16GB
-          maximum-size: 64GB
-          disk-root: "D:"
-      - name: clone
-        shell: bash
-        run: |
-          git -c core.autocrlf=false -c core.eol=lf clone --depth 1 \
-            --branch "${{ inputs.ref }}" "https://github.com/${{ github.repository }}" repo
-      - name: install CUDA 13.0
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri $env:CUDA_INSTALLER -OutFile cuda.exe
-          # upstream's component list for its MLX CUDA 13 build
-          $parts = @('cudart','nvcc','cublas','cublas_dev','cufft','cufft_dev','nvrtc','nvrtc_dev',
-                     'cusolver','cusolver_dev','cusparse','cusparse_dev','nvjitlink','crt','nvvm','nvptxcompiler') |
-                   ForEach-Object { "${_}_13.0" }
-          Start-Process -FilePath .\cuda.exe -ArgumentList (@('-s') + $parts) -NoNewWindow -Wait
-          $cuda = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0'
-          if (-not (Test-Path "$cuda\bin\nvcc.exe")) { throw "CUDA 13.0 did not install" }
-          & "$cuda\bin\nvcc.exe" --version
-      - name: unpack cuDNN 9.18
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri $env:CUDNN_ARCHIVE -OutFile cudnn.zip
-          Expand-Archive -Path cudnn.zip -DestinationPath cudnn-extracted
-          # Not "C:\Program Files\NVIDIA\CUDNN", where upstream's is: a folder
-          # that exists on no user's machine, so anything that still points
-          # at the build machine's cuDNN fails here as it would there.
-          $root = Join-Path $env:RUNNER_TEMP 'cudnn'
-          Move-Item (Get-ChildItem cudnn-extracted -Directory)[0].FullName $root
-          "CUDNN_ROOT_DIR=$root"              | Out-File $env:GITHUB_ENV -Append
-          "CUDNN_INCLUDE_PATH=$root\include"  | Out-File $env:GITHUB_ENV -Append
-          "CUDNN_LIBRARY_PATH=$root\lib\x64"  | Out-File $env:GITHUB_ENV -Append
-          Get-ChildItem "$root\bin\x64" -Filter *.dll | ForEach-Object Name
-      - name: build
-        working-directory: repo
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version '[17.0,18.0)' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vs) { throw "no Visual Studio 2022 with the C++ tools on this runner" }
-          Write-Host "Visual Studio: $vs"
-          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -no_logo'
-          $cuda = 'C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.0'
-          $env:CUDA_PATH = $cuda
-          $env:CUDAToolkit_ROOT = $cuda
-          $env:CUDACXX = "$cuda/bin/nvcc.exe"
-          $env:CMAKE_GENERATOR = 'Ninja'
-          $dist = (Join-Path $PWD 'dist\windows-amd64') -replace '\\','/'
-          # upstream's mlxCuda13 configure (scripts/build_windows.ps1), plus the two folders
-          & cmake -S . -B build\mlx_cuda_v13 -DOLLAMA_MLX_BACKENDS=cuda_v13 `
-            "-DCUDAToolkit_ROOT:PATH=$cuda" "-DCMAKE_CUDA_COMPILER:FILEPATH=$cuda/bin/nvcc.exe" `
-            "-DCMAKE_CUDA_FLAGS=-t 2" `
-            '-DMLX_CUDA_BIN_DIR=.' '-DMLX_CUDNN_BIN_DIR=.' `
-            "-DOLLAMA_PAYLOAD_INSTALL_PREFIX=$dist" --install-prefix $dist
-          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
-          & cmake --build build\mlx_cuda_v13 --target ollama-mlx-cuda_v13 --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw "build failed" }
-      - name: check the folders mlx.dll looks in
-        working-directory: repo
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # the setting reached MLX's own configure
-          $caches = Get-ChildItem build -Recurse -Filter CMakeCache.txt |
-                    Where-Object { Select-String -Path $_.FullName -Pattern '^MLX_CUDNN_BIN_DIR' -Quiet }
-          if (-not $caches) { throw "no MLX configure carries MLX_CUDNN_BIN_DIR" }
-          foreach ($cache in $caches) {
-            foreach ($name in 'MLX_CUDNN_BIN_DIR','MLX_CUDA_BIN_DIR') {
-              $line = Select-String -Path $cache.FullName -Pattern "^${name}:" | Select-Object -First 1
-              "$($cache.FullName): $line"
-              if ("$line" -notmatch '=\.$') { throw "$name is not '.' in $($cache.FullName)" }
-            }
-          }
-          # and no build-machine folder is left in the DLL
-          $dll = Get-ChildItem dist -Recurse -Filter mlx.dll | Select-Object -First 1
-          if (-not $dll) { throw "no mlx.dll in dist" }
-          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($dll.FullName))
-          foreach ($baked in 'NVIDIA/CUDNN/bin', 'CUDA/v13.0/bin/x64') {
-            if ($text.Contains($baked)) { throw "mlx.dll still names $baked" }
-            "mlx.dll does not name $baked"
-          }
-          # every DLL MLX loads by folder is next to it
-          $dir = $dll.Directory.FullName
-          foreach ($want in 'cudnn_graph64_9.dll','cudnn64_9.dll','cublas64_13.dll','cublasLt64_13.dll','nvrtc64_130_0.dll','cusolver64_12.dll') {
-            if (-not (Test-Path (Join-Path $dir $want))) { throw "$want is not next to mlx.dll" }
-          }
-          Get-ChildItem $dir -File | ForEach-Object { "{0,10:N1} MB  {1}" -f ($_.Length/1MB), $_.Name }
-      - name: package
-        working-directory: repo/dist
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # upstream's layout and zipper (scripts/build_windows.ps1): a
-          # windows-amd64-mlx folder holding README_MLX.txt and lib/ollama/mlx_*,
-          # zipped by 7z. tar.exe could not visit the deepest include folders.
-          $stage = Join-Path $PWD 'windows-amd64-mlx'
-          New-Item -ItemType Directory -Force (Join-Path $stage 'lib\ollama') | Out-Null
-          'Extract this MLX zip file to the same location where you extracted ollama-windows-amd64.zip' |
-            Set-Content -NoNewline -Encoding ascii (Join-Path $stage 'README_MLX.txt')
-          Get-ChildItem windows-amd64\lib\ollama -Directory -Filter 'mlx_*' |
-            Move-Item -Destination (Join-Path $stage 'lib\ollama')
-          $zip = Join-Path (Split-Path $PWD) 'ollama-windows-amd64-mlx.zip'
-          & 7z a -tzip -mx=7 -mmt=on $zip "$stage\*" | Select-Object -Last 3
-          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
-          # every file staged is in the zip, and mlx.dll where ollama looks for it
-          $staged = (Get-ChildItem $stage -Recurse -File).Count
-          $listed = & 7z l -slt $zip | Select-String '^Path = '
-          $zipped = (& 7z l -ba $zip | Where-Object { $_ -notmatch ' D\.\.\.\. ' }).Count
-          "staged $staged files, zip lists $zipped"
-          if ($zipped -ne $staged) { throw "the zip holds $zipped files of $staged" }
-          if (-not ($listed | Where-Object { $_.Line -match 'lib\\ollama\\mlx_cuda_v13\\mlx\.dll$' })) { throw "no lib/ollama/mlx_cuda_v13/mlx.dll in the zip" }
-          Get-Item $zip | ForEach-Object { "{0:N1} MB" -f ($_.Length/1MB) }
-          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-      # The build takes hours; a packaging fault must not cost another one.
-      - name: keep the build if packaging failed
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-amd64-mlx
-          path: |
-            repo/dist/windows-amd64-mlx
-            repo/dist/windows-amd64/lib/ollama/mlx_*
-          retention-days: 3
-          compression-level: 0
-          if-no-files-found: ignore
-      - name: attach to the release
-        shell: bash
-        working-directory: repo
-        run: |
-          zip="ollama-windows-amd64-mlx${SUFFIX}.zip"
-          [ "$zip" = ollama-windows-amd64-mlx.zip ] || cp ollama-windows-amd64-mlx.zip "$zip"
-          sha256sum "$zip"
-          gh release upload "${{ inputs.tag }}" "$zip" $CLOBBER
-
   checksums:
-    needs: [build, reuse-runtimes, windows-runtime, linux-runtime, linux-arm64, windows-app, windows-mlx]
+    needs: [build, reuse-runtimes, windows-runtime, linux-runtime, linux-arm64, windows-app]
     if: always()
     runs-on: ubuntu-latest
     steps:
