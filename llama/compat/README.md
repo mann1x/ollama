@@ -25,6 +25,12 @@ intentionally skipped so a developer can iterate on a local llama.cpp tree.
   small tensor repacking primitives.
 - `001-llama-cpp-hooks.patch` - small additive call-site edits in llama.cpp files.
   It currently touches `src/llama-model-loader.cpp` and `tools/mtmd/clip.cpp`.
+- `006-completion-generation-prompt.patch` - accepts `generation_prompt` on
+  llama-server's completion request again, so a thinking block the template
+  opens is replayed into the reasoning budget sampler. llama.cpp b11669 dropped
+  the field; without it a `think_budget` on any model whose prompt ends with the
+  opening tag (qwen3, gemma4) is reported but never enforced. Drop this file
+  when the pinned llama.cpp accepts the field again.
 - `compat.cmake` - CMake glue that invokes the shared
   `cmake/apply-git-patches.cmake` idempotent applier (used by
   `llama/server/CMakeLists.txt`) for every `*.patch` under
