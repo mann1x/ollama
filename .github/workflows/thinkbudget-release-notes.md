@@ -2,6 +2,14 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.10`** (was `v0.40.9`). Upstream's one change in
+this release updates the Gemma renderers. Every carried patch applies to the
+new base with the same changes it made before, and none needed porting.
+llama.cpp stays at `b11803` and MLX is unchanged, so the runtime and MLX
+archives are the same files as in `0.40.9-1-thinkbudget`.
+
+## Also in this build, from 0.40.9-1-thinkbudget
+
 **A thinking budget works again on models whose template opens the thinking
 block.** Many templates, qwen3's and gemma4's among them, end the prompt with
 the opening `<think>` tag, so the model never writes that tag itself. Ollama
