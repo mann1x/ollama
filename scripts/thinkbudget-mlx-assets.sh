@@ -63,4 +63,15 @@ if [ "$upload" = "--upload" ]; then
 	gh release upload "$release" --repo "$fork" --clobber \
 		ollama-linux-amd64-mlx.tar.zst ollama-windows-amd64-mlx.zip \
 		ollama-darwin-mlx.tgz mlx-runtime.txt
+	# The workflow's checksums job ran before these existed, so its
+	# sha256sum.txt lists only the run's own assets. Rewrite it from the
+	# release's digests (every asset but itself), which needs no download.
+	gh release view "$release" --repo "$fork" --json assets \
+		--jq '.assets[] | select(.name != "sha256sum.txt") | "\(.digest | ltrimstr("sha256:"))  \(.name)"' |
+		sort -k2 > release-sha256sum.txt
+	[ "$(wc -l < release-sha256sum.txt)" -gt 4 ] || { echo "refusing: the release lists too few assets" >&2; exit 1; }
+	grep -qv '^[0-9a-f]\{64\}  ' release-sha256sum.txt && { echo "refusing: an asset has no sha256 digest" >&2; exit 1; }
+	cp release-sha256sum.txt sha256sum.txt
+	gh release upload "$release" --repo "$fork" --clobber sha256sum.txt
+	echo "sha256sum.txt: $(wc -l < sha256sum.txt) entries, $(sha256sum sha256sum.txt | cut -c1-8)"
 fi
