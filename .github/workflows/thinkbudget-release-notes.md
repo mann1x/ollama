@@ -2,11 +2,25 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
-**Rebased onto Ollama `v0.40.10`** (was `v0.40.9`). Upstream's one change in
-this release updates the Gemma renderers. Every carried patch applies to the
-new base with the same changes it made before, and none needed porting.
-llama.cpp stays at `b11803` and MLX is unchanged, so the runtime and MLX
-archives are the same files as in `0.40.9-1-thinkbudget`.
+**Rebased onto Ollama `v0.40.11`** (was `v0.40.10`). llama.cpp moves from
+`b11803` to `b11845`, so the runtime archives are rebuilt; MLX is unchanged.
+
+**qwen3-coder tool calls: a literal `</function>` inside a value, and
+parameters holding parameters.** Upstream's #19228 keeps a `</function>`
+that a parameter's value contains, such as `text = "</function>"`, as text
+instead of ending the call there. That is carried here too, with one
+difference: when the parameter is never closed after it, the model dropped
+`</parameter>` and this build still recovers the call, as it did before.
+Upstream also stopped accepting calls with a missing closing tag; this build
+keeps recovering them. One case is now refused, however: a parameter that holds
+other parameters (an `edits` list of `oldText`/`newText`, with the outer
+parameter never closed) used to come out as a call with an empty `edits` and
+two arguments the model never wrote. It now comes back as text, unrecovered.
+
+## Also in this build, from 0.40.10-thinkbudget
+
+Rebased onto Ollama `v0.40.10`: upstream's one change updated the Gemma
+renderers, and no carried patch needed porting.
 
 ## Also in this build, from 0.40.9-1-thinkbudget
 
