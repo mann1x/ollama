@@ -2,6 +2,17 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.12`** (was `v0.40.11`). llama.cpp moves from
+`b11845` to `b11901`, so the runtime archives are rebuilt; the ones from
+`0.40.11-thinkbudget` do not match this build. MLX and MLX-C move too
+(upstream's prompt speed-up for Gemma, Flint and Laguna), and the MLX archives
+are upstream's `v0.40.12` ones. Every carried patch applies to the new base
+with the same changes it made before; none needed porting. Upstream's new LFM3
+parser is built on the Qwen 3.5 one, so it inherits the Qwen 3.5 thinking and
+tool-call tags this build carries.
+
+## Also in this build, from 0.40.11-thinkbudget
+
 **Rebased onto Ollama `v0.40.11`** (was `v0.40.10`). llama.cpp moves from
 `b11803` to `b11845`, so the runtime archives are rebuilt; MLX is unchanged.
 
