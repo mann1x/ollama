@@ -1186,6 +1186,12 @@ func (s *llamaServerRunner) resetLoadAccounting() {
 	for k := range s.systemFreeAtLoad {
 		delete(s.systemFreeAtLoad, k)
 	}
+	// The parsed buffers belong to the process being replaced. Kept, a
+	// projector buffer from a GPU attempt stayed counted after the retry put
+	// the projector on the CPU.
+	if s.output != nil {
+		s.output.resetLocked()
+	}
 	if s.status != nil {
 		s.status.SetLastError("")
 	}
@@ -1469,6 +1475,24 @@ type llamaServerCompletionRequest struct {
 	NProbs          int             `json:"n_probs,omitempty"`
 	PreservedTokens []string        `json:"preserved_tokens,omitempty"`
 	TimingsPerToken bool            `json:"timings_per_token,omitempty"`
+
+	// Reasoning budget sampler. llama-server activates it once it sees
+	// ReasoningBudgetStartTag generated (or present in GenerationPrompt), then
+	// forces ReasoningBudgetEndTag after ReasoningBudgetTokens tokens.
+	ReasoningBudgetTokens   int    `json:"reasoning_budget_tokens,omitempty"`
+	ReasoningBudgetStartTag string `json:"reasoning_budget_start_tag,omitempty"`
+	ReasoningBudgetEndTag   string `json:"reasoning_budget_end_tag,omitempty"`
+	// ReasoningBudgetMessage must be sent even when empty: llama-server builds
+	// the sequence it forces from message+end_tag, and only does so when this
+	// field is present. A pointer keeps the empty string on the wire.
+	ReasoningBudgetMessage *string `json:"reasoning_budget_message,omitempty"`
+	// ReasoningBudgetScope spends the budget across the whole response
+	// ("response") rather than re-arming it for every thinking block
+	// ("block", llama-server's default). ReasoningBudgetResetTag forgives what
+	// has been spent when it appears -- a tool call means progress, not a loop.
+	ReasoningBudgetScope    string `json:"reasoning_budget_scope,omitempty"`
+	ReasoningBudgetResetTag string `json:"reasoning_budget_reset_tag,omitempty"`
+	GenerationPrompt        string `json:"generation_prompt,omitempty"`
 }
 
 // schemaGrammars caches the grammars llama-server derives from JSON schemas,
@@ -1592,6 +1616,41 @@ func leadingSpecialTokenCandidate(tag string) string {
 	}
 
 	return tag[:end+1]
+}
+
+// maxThinkingGenerationPrompt bounds how much of the prompt is replayed into
+// the budget sampler. Every renderer that primes thinking does so with the
+// opening tag and at most a channel name, so a longer run means the tag came
+// from message content rather than the template: replaying that would activate
+// the budget against text the model never generated.
+const maxThinkingGenerationPrompt = 64
+
+// thinkingGenerationPrompt returns the part of the prompt that already sits
+// inside an unclosed thinking block, for llama-server to replay into the
+// reasoning-budget sampler before decoding.
+//
+// The sampler leaves its idle state only when the opening tag passes through
+// it, so a template that primes thinking — by ending the prompt with the tag,
+// or with the tag plus a channel name, as gemma4 does after a tool response —
+// otherwise leaves the budget silently inert for the whole turn. Matching the
+// unclosed opening rather than the exact suffix keeps that from depending on
+// how much a renderer writes after the tag.
+func thinkingGenerationPrompt(prompt, startTag, endTag string) string {
+	if startTag == "" || endTag == "" {
+		return ""
+	}
+
+	start := strings.LastIndex(prompt, startTag)
+	if start == -1 {
+		return ""
+	}
+
+	tail := prompt[start:]
+	if strings.Contains(tail[len(startTag):], endTag) || len(tail) > maxThinkingGenerationPrompt {
+		return ""
+	}
+
+	return tail
 }
 
 // llamaServerMultimodalPrompt is used when images are present.
@@ -1719,6 +1778,36 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 		lsReq.NProbs = max(req.TopLogprobs, 1)
 	}
 
+	// Cap thinking. llama-server's reasoning budget sampler needs both
+	// delimiters: it starts counting at the opening tag and forces the closing
+	// tag once the budget runs out.
+	if req.ThinkBudget > 0 && req.ThinkingStartTag != "" && req.ThinkingEndTag != "" {
+		lsReq.ReasoningBudgetTokens = req.ThinkBudget
+		lsReq.ReasoningBudgetStartTag = req.ThinkingStartTag
+		lsReq.ReasoningBudgetEndTag = req.ThinkingEndTag
+		// Sent even when empty. llama-server builds the sequence it forces
+		// from message+end_tag, and on the pinned runtime it builds it in this
+		// field's handler, so an absent field is a handler that never runs:
+		// the budget expires with nothing to force, the sampler logs its usual
+		// states, and the thinking block is left open.
+		lsReq.ReasoningBudgetMessage = &req.ThinkBudgetMessage
+
+		// Bound the response, not the block. Measured live on gemma4: six
+		// consecutive thinking blocks, each closed by the model just short of
+		// its 8,000-token window and each re-armed in full, consumed a 32,000
+		// token output cap without the budget ever expiring -- so the message
+		// that tells the model to wrap up was never injected and the turn
+		// ended with neither an answer nor a tool call.
+		lsReq.ReasoningBudgetScope = "response"
+		lsReq.ReasoningBudgetResetTag = req.ThinkBudgetResetTag
+
+		// The sampler only sees tokens the model generates, so a template that
+		// primes thinking by ending the prompt inside a thinking block would
+		// never activate it. Hand that opening over as the generation prompt
+		// instead: llama-server replays it into the sampler before decoding.
+		lsReq.GenerationPrompt = thinkingGenerationPrompt(req.Prompt, req.ThinkingStartTag, req.ThinkingEndTag)
+	}
+
 	// Handle format: pass JSON schema directly to llama-server, or use grammar
 	if len(req.Format) > 0 {
 		switch string(req.Format) {
@@ -1811,8 +1900,8 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 	buf := make([]byte, 0, llamaServerStreamInitialBufferSize)
 	scanner.Buffer(buf, llamaServerStreamMaxBufferSize)
 
-	var lastToken string
-	var tokenRepeat int
+	var repeat repeatGuard
+	var evalCount int
 	var finalResp CompletionResponse
 	var hasFinalResp bool
 
@@ -1839,17 +1928,26 @@ func (s *llamaServerRunner) Completion(ctx context.Context, req CompletionReques
 				return fmt.Errorf("error unmarshalling llama-server response: %v", err)
 			}
 
-			// Token repeat detection
-			switch {
-			case strings.TrimSpace(lsResp.Content) == lastToken:
-				tokenRepeat++
-			default:
-				lastToken = strings.TrimSpace(lsResp.Content)
-				tokenRepeat = 0
+			if lsResp.Content != "" {
+				evalCount++
 			}
-			if tokenRepeat > 100 {
-				slog.Debug("prediction aborted, token repeat limit reached")
-				return fmt.Errorf("prediction aborted, token repeat limit reached")
+
+			// A generation that has come apart repeats one short unit until
+			// something stops it. Cut it off, and say so: the response is
+			// already partly streamed, so it ends as a normal completion with
+			// a reason the caller can act on.
+			if repeat.observe(lsResp.Content) {
+				slog.Warn("stopping generation, output repeated the same sequence past the limit",
+					"period", repeat.period(), "bytes", repeatGuardBudgetBytes)
+				if err := res.Body.Close(); err != nil {
+					return fmt.Errorf("error closing llama-server response: %v", err)
+				}
+				fn(CompletionResponse{
+					Done:       true,
+					DoneReason: DoneReasonRepeat,
+					EvalCount:  evalCount,
+				})
+				return nil
 			}
 
 			if lsResp.Content != "" && !lsResp.Stop {
@@ -2331,6 +2429,21 @@ func (s *llamaServerRunner) llamaServerChatRequest(req ChatRequest, stream bool)
 	if kwargs := llamaServerChatTemplateKwargs(req.Think); kwargs != nil {
 		body["chat_template_kwargs"] = kwargs
 	}
+	// llama-server owns the chat template on this path, so it already knows the
+	// thinking delimiters and only needs the budget.
+	window := api.ThinkBudgetWindow(s.ContextLength(), req.Options.NumPredict)
+	// Only think_budget bounds thinking. A level in think is the model's
+	// control and went into the template kwargs above.
+	budget := 0
+	if req.Think == nil || req.Think.Bool() {
+		budget = req.Options.ThinkBudget.Tokens(window)
+	}
+	if budget > 0 {
+		body["thinking_budget_tokens"] = budget
+		// llama-server reads this from the chat body too, and needs it present
+		// to build the sequence it forces
+		body["reasoning_budget_message"] = req.Options.ThinkBudgetMessage
+	}
 	if format, err := llamaServerChatResponseFormat(req.Format); err != nil {
 		return nil, err
 	} else if format != nil {
@@ -2359,6 +2472,20 @@ func llamaServerChatTemplateKwargs(think *api.ThinkValue) map[string]any {
 func llamaServerChatMessage(msg Message) (map[string]any, error) {
 	converted := map[string]any{
 		"role": msg.Role,
+	}
+	// Thinking has to reach the chat template, not just the client. A template
+	// that replays an assistant think block reads `reasoning_content`, and the
+	// Qwen-family templates gate that replay on the message being newer than
+	// the last real user query -- which, in an agentic tool loop, is every
+	// assistant turn since the task was set. Dropping the field here leaves
+	// those blocks empty, so a model re-derives each turn what it already
+	// worked out, and describes its own earlier turns as someone else's.
+	//
+	// Only an assistant turn carries reasoning. llama-server passes the field
+	// through on any role, so thinking a client left on a user or tool message
+	// would reach any template that does not check the role itself.
+	if msg.Role == "assistant" && msg.Thinking != "" {
+		converted["reasoning_content"] = msg.Thinking
 	}
 	if msg.ToolCallID != "" {
 		converted["tool_call_id"] = msg.ToolCallID
@@ -2881,17 +3008,43 @@ func PredictServerVRAM(modelPath string, f *gguf.Model, numCtx int) uint64 {
 //	CUDA_Host compute buffer size =   268.05 MiB
 //	MTL0_Mapped model buffer size =  1918.35 MiB
 //	ROCm0 model buffer size =  1918.35 MiB
+//
+// Output is parsed a line at a time. llama-server's stdout and stderr share
+// one pipe, and a read from it ends wherever the pipe had data, not at a line
+// end: a buffer line split across two writes matched in neither, and a 9B
+// model fully on the GPU was reported at 373 MiB because its model and KV
+// lines were lost that way.
 type memoryParsingWriter struct {
 	inner   io.Writer
 	runner  *llamaServerRunner
 	buffers map[memoryBufferKey]memoryBuffer
+	// pending holds the unterminated tail of the last write.
+	pending []byte
+	// inDraft is set while llama-server builds a speculative draft model or
+	// context, whose buffers are allocated beside the target's.
+	inDraft bool
 }
 
 type memoryBufferKey struct {
 	component string
 	backend   string
 	kind      string
+	// draft marks a buffer of the speculative draft. The draft logs the same
+	// component and backend names as the target, so without it an MTP
+	// draft's 512 MiB KV cache replaced the target's 2176 MiB one.
+	draft bool
 }
+
+// maxPendingLine bounds the unterminated tail kept between writes. A buffer
+// line is under 100 bytes; anything this long without a newline is not one.
+const maxPendingLine = 64 * 1024
+
+// draftStartRegex and draftEndRegex bracket the draft's construction
+// (common/speculative.cpp, tools/server).
+var (
+	draftStartRegex = regexp.MustCompile(`creating MTP draft context|loading draft model`)
+	draftEndRegex   = regexp.MustCompile(`speculative decoding context initialized|model loaded`)
+)
 
 type memoryBuffer struct {
 	bytes uint64
@@ -2949,43 +3102,91 @@ func (w *memoryParsingWriter) Write(b []byte) (int, error) {
 			w.runner.memoryMu.Lock()
 			defer w.runner.memoryMu.Unlock()
 
-			if match := deviceFreeRegex.FindSubmatch(b); match != nil {
-				devName := string(match[1])
-				if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
-					w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
+			data := append(w.pending, b...)
+			end := bytes.LastIndexByte(data, '\n')
+			if end < 0 {
+				if len(data) > maxPendingLine {
+					data = data[len(data)-maxPendingLine:]
 				}
+				w.pending = data
+				return
 			}
-			for _, match := range offloadedLayersRegex.FindAllSubmatch(b, -1) {
-				loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
-				total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
-				if loadedErr == nil && totalErr == nil {
-					w.runner.gpuLayers = loaded
-					w.runner.totalLayers = total
-				}
+			for _, line := range bytes.Split(data[:end], []byte("\n")) {
+				w.parseLineLocked(bytes.TrimSuffix(line, []byte("\r")))
 			}
-			for _, match := range fitOverflowingLayersRegex.FindAllSubmatch(b, -1) {
-				overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
-				if err == nil && overflowing > 0 {
-					w.runner.gpuLayerOverflow += int(overflowing)
-				}
-			}
-			for _, match := range bufferSizeRegex.FindAllSubmatch(b, -1) {
-				backendName := string(match[2])
-				if mib, err := strconv.ParseFloat(string(match[4]), 64); err == nil {
-					if w.buffers == nil {
-						w.buffers = make(map[memoryBufferKey]memoryBuffer)
-					}
-					w.buffers[memoryBufferKey{
-						component: string(match[1]),
-						backend:   backendName,
-						kind:      string(match[3]),
-					}] = memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
-					w.updateRunnerMemoryLocked()
-				}
-			}
+			w.pending = append([]byte(nil), data[end+1:]...)
 		}()
 	}
 	return w.inner.Write(b)
+}
+
+// parseLineLocked reads one complete line of llama-server output.
+func (w *memoryParsingWriter) parseLineLocked(line []byte) {
+	if match := deviceFreeRegex.FindSubmatch(line); match != nil {
+		devName := string(match[1])
+		if mib, err := strconv.ParseUint(string(match[2]), 10, 64); err == nil {
+			w.runner.systemFreeAtLoad[devName] = mib * 1024 * 1024
+		}
+	}
+	if match := offloadedLayersRegex.FindSubmatch(line); match != nil {
+		loaded, loadedErr := strconv.ParseUint(string(match[1]), 10, 64)
+		total, totalErr := strconv.ParseUint(string(match[2]), 10, 64)
+		if loadedErr == nil && totalErr == nil {
+			w.runner.gpuLayers = loaded
+			w.runner.totalLayers = total
+		}
+	}
+	if match := fitOverflowingLayersRegex.FindSubmatch(line); match != nil {
+		overflowing, err := strconv.ParseUint(string(match[1]), 10, 64)
+		if err == nil && overflowing > 0 {
+			w.runner.gpuLayerOverflow += int(overflowing)
+		}
+	}
+	if draftStartRegex.Match(line) {
+		w.inDraft = true
+		return
+	}
+	if draftEndRegex.Match(line) {
+		w.inDraft = false
+		return
+	}
+	match := bufferSizeRegex.FindSubmatch(line)
+	if match == nil {
+		return
+	}
+	mib, err := strconv.ParseFloat(string(match[4]), 64)
+	if err != nil {
+		return
+	}
+	if w.buffers == nil {
+		w.buffers = make(map[memoryBufferKey]memoryBuffer)
+	}
+	key := memoryBufferKey{
+		component: string(match[1]),
+		backend:   string(match[2]),
+		kind:      string(match[3]),
+		draft:     w.inDraft,
+	}
+	buffer := memoryBuffer{bytes: uint64(mib * 1024 * 1024)}
+	// After loading, both contexts re-reserve their compute buffers without
+	// saying which one is speaking. A size the draft already holds, and the
+	// target does not, is the draft's.
+	if !key.draft {
+		draftKey := key
+		draftKey.draft = true
+		if held, ok := w.buffers[draftKey]; ok && held == buffer && w.buffers[key] != buffer {
+			key = draftKey
+		}
+	}
+	w.buffers[key] = buffer
+	w.updateRunnerMemoryLocked()
+}
+
+// resetLocked forgets everything parsed, for a llama-server started again.
+func (w *memoryParsingWriter) resetLocked() {
+	w.buffers = nil
+	w.pending = nil
+	w.inDraft = false
 }
 
 func (w *memoryParsingWriter) updateRunnerMemoryLocked() {
