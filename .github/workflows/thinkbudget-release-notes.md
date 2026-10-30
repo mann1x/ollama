@@ -2,6 +2,16 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.13`** (was `v0.40.12`). llama.cpp moves from
+`b11901` to `b11963`, so the runtime archives are rebuilt; the ones from
+`0.40.12-thinkbudget` do not match this build. Upstream also added a llama.cpp
+patch that works around a crash in Metal's unary kernels; it only affects
+Apple GPUs and is carried here as is. MLX and MLX-C are unchanged, and the MLX
+archives are upstream's `v0.40.13` ones. Every carried patch applies to the
+new base with the same changes it made before; none needed porting.
+
+## Also in this build, from 0.40.12-thinkbudget
+
 **Rebased onto Ollama `v0.40.12`** (was `v0.40.11`). llama.cpp moves from
 `b11845` to `b11901`, so the runtime archives are rebuilt; the ones from
 `0.40.11-thinkbudget` do not match this build. MLX and MLX-C move too
