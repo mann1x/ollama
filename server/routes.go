@@ -1966,6 +1966,9 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 	}
 	if slices.Contains(resp.Capabilities, model.CapabilitySpeech) {
 		resp.Voices = append(speechVoices(mf), m.Config.Voices...)
+		if len(resp.Voices) == 0 {
+			resp.Voices = ggufSpeechVoices(m)
+		}
 	}
 
 	if summaries, err := manifestSummariesForShow(name, mf.SelectedDigest()); err != nil {
