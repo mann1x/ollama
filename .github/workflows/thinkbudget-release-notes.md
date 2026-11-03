@@ -2,6 +2,17 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.14`** (was `v0.40.13`). llama.cpp stays at
+`b11963` and nothing under `llama/` changed, so the runtime archives are the
+ones from `0.40.13-thinkbudget`, unchanged. Upstream no longer forces
+`temperature`, `top_p` and the penalties on OpenAI-compatible requests that
+leave them unset, so a model's own sampler defaults now apply there. MLX and
+MLX-C are unchanged, and the MLX archives are upstream's `v0.40.14` ones.
+Every carried patch applies to the new base with the same changes it made
+before; none needed porting.
+
+## Also in this build, from 0.40.13-thinkbudget
+
 **Rebased onto Ollama `v0.40.13`** (was `v0.40.12`). llama.cpp moves from
 `b11901` to `b11963`, so the runtime archives are rebuilt; the ones from
 `0.40.12-thinkbudget` do not match this build. Upstream also added a llama.cpp
