@@ -3008,6 +3008,8 @@ func PredictServerVRAM(modelPath string, f *gguf.Model, numCtx int) uint64 {
 //	CUDA_Host compute buffer size =   268.05 MiB
 //	MTL0_Mapped model buffer size =  1918.35 MiB
 //	ROCm0 model buffer size =  1918.35 MiB
+//	llama_context:         CUDA0 layer input buffer size =     4.00 MiB (16 layers)
+//	init_rotation:         CUDA0 rotation buffer size =    23.04 MiB
 //
 // Output is parsed a line at a time. llama-server's stdout and stderr share
 // one pipe, and a read from it ends wherever the pipe had data, not at a line
@@ -3059,7 +3061,7 @@ var deviceFreeRegex = regexp.MustCompile(`using device (\S+)\s+\(.*\)\s+-\s+(\d+
 
 // bufferSizeRegex matches llama-server buffer size lines and captures the
 // component so repeated fit/probe values can be replaced by the final load.
-var bufferSizeRegex = regexp.MustCompile(`(?m)(?:^|\n)[^\n:]*?([A-Za-z_][A-Za-z0-9_]*):\s+(\S+)\s+(model|KV|compute|output|RS)\s+buffer size\s*=\s*([\d.]+)\s*MiB`)
+var bufferSizeRegex = regexp.MustCompile(`(?m)(?:^|\n)[^\n:]*?([A-Za-z_][A-Za-z0-9_]*):\s+(\S+)\s+(layer input|rotation|model|KV|compute|output|RS)\s+buffer size\s*=\s*([\d.]+)\s*MiB`)
 
 var (
 	offloadedLayersRegex      = regexp.MustCompile(`offloaded\s+(\d+)/(\d+)\s+layers to GPU`)
