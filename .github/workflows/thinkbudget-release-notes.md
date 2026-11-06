@@ -2,6 +2,23 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.15`** (was `v0.40.14`). llama.cpp moves from
+`b11963` to `b12111`, so the runtime archives are rebuilt; the ones from
+`0.40.14-thinkbudget` do not match this build. Upstream's Metal workaround
+patch is gone, because llama.cpp now has the fix itself. MLX moves too, and
+the MLX archives are upstream's `v0.40.15` ones; on Linux they now load their
+bundled CUDA libraries in-process. Upstream lets llama-server take parallel
+requests for recurrent and vision models, and adds a MiMo V2.6 renderer that
+uses the Qwen 3.5 parser, so it inherits the Qwen 3.5 thinking and tool-call
+fixes this build carries.
+
+Every carried patch applies to the new base with the same changes it made
+before. The memory-accounting patch needed one merge by hand where upstream
+taught the parser two more buffer kinds (`layer input` and `rotation`): both
+are counted, as upstream counts them.
+
+## Also in this build, from 0.40.14-thinkbudget
+
 **Rebased onto Ollama `v0.40.14`** (was `v0.40.13`). llama.cpp stays at
 `b11963` and nothing under `llama/` changed, so the runtime archives are the
 ones from `0.40.13-thinkbudget`, unchanged. Upstream no longer forces
