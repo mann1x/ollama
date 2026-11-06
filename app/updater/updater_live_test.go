@@ -4,20 +4,25 @@ package updater
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/ollama/ollama/app/store"
 	"github.com/ollama/ollama/app/version"
 )
 
-// TestLiveAppUpdate exercises the production update endpoint and downloads the
-// current OS update artifact. It is intentionally excluded from normal test
-// runs because it depends on ollama.com and downloads a release artifact.
+// TestLiveAppUpdate exercises the real update endpoint this build ships
+// pointing at. It is excluded from normal test runs because it depends on the
+// network.
+//
+// It no longer downloads anything, and the reason is the change it is here to
+// guard. Upstream's version of this test spoofed an old version, asked
+// ollama.com, and asserted that an installer came back; this build asks the
+// fork it is released from, and that series publishes a binary and the base
+// runtime rather than an installer -- so the correct answer to "is there an
+// update" is "no", and there is nothing to stage. What is still worth checking
+// live is everything up to that point: that the endpoint is reachable, that
+// its answer parses, and that a release far newer than anything published is
+// still declined for want of something installable.
 //
 // Run with:
 //
@@ -25,103 +30,48 @@ import (
 func TestLiveAppUpdate(t *testing.T) {
 	const spoofedVersion = "0.20.0"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
-	oldUpdateStageDir := UpdateStageDir
-	oldUpdateDownloaded := UpdateDownloaded
-	oldVerifyDownload := VerifyDownload
 	oldVersion := version.Version
-	defer func() {
-		UpdateStageDir = oldUpdateStageDir
-		UpdateDownloaded = oldUpdateDownloaded
-		VerifyDownload = oldVerifyDownload
-		version.Version = oldVersion
-	}()
-
+	t.Cleanup(func() { version.Version = oldVersion })
 	version.Version = spoofedVersion
 
-	expectedFilename := ""
-	switch runtime.GOOS {
-	case "windows":
-		t.Setenv("LOCALAPPDATA", t.TempDir())
-		expectedFilename = "OllamaSetup.exe"
-	case "darwin":
-		expectedFilename = "Ollama-darwin.zip"
-	default:
-		t.Fatalf("unsupported updater live test OS %q", runtime.GOOS)
+	if UpdateCheckURLBase == "" {
+		t.Fatal("this build has update checks compiled off")
 	}
+	t.Logf("update endpoint %s", UpdateCheckURLBase)
 
-	UpdateStageDir = filepath.Join(t.TempDir(), "updates")
-	UpdateDownloaded = false
-	verifyCalled := false
-	VerifyDownload = func() error {
-		verifyCalled = true
-		return verifyDownload()
-	}
-
-	updater := &Updater{Store: &store.Store{DBPath: filepath.Join(t.TempDir(), "db.sqlite")}}
-	defer updater.Store.Close()
-
+	updater := &Updater{}
 	available, updateResp := updater.checkForUpdate(ctx)
-	if !available {
-		t.Fatalf("expected production update check to offer an update for spoofed version %s", spoofedVersion)
+	if available {
+		// Not a failure of the endpoint -- a release that carries an installer
+		// is a real change in what this series publishes, and the deployment
+		// notes say it does not. Fail loudly so the claim gets revisited.
+		t.Fatalf("the fork offered an installable update: version=%q url=%q", updateResp.UpdateVersion, updateResp.UpdateURL)
 	}
-	if updateResp.UpdateURL == "" {
-		t.Fatal("production update response did not include a download URL")
-	}
-	t.Logf("production update version=%q url=%q", updateResp.UpdateVersion, updateResp.UpdateURL)
-
-	if err := updater.DownloadNewRelease(ctx, updateResp); err != nil {
-		t.Fatalf("download production update: %v", err)
-	}
-
-	staged := getStagedUpdate()
-	if staged == "" {
-		t.Fatal("production update was not staged")
-	}
-	t.Logf("staged production update at %s", staged)
-
-	assertPathInsideDir(t, UpdateStageDir, staged)
-	if filepath.Base(staged) != expectedFilename {
-		t.Fatalf("expected staged %s update filename to be %q, got %q", runtime.GOOS, expectedFilename, filepath.Base(staged))
-	}
-	expectedExt := filepath.Ext(expectedFilename)
-	if filepath.Ext(staged) != expectedExt {
-		t.Fatalf("expected staged %s update to be a %s artifact, got %s", runtime.GOOS, expectedExt, staged)
-	}
-
-	info, err := os.Stat(staged)
-	if err != nil {
-		t.Fatalf("stat staged update: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Fatal("staged production update is empty")
-	}
-
-	if !verifyCalled {
-		t.Fatal("DownloadNewRelease did not call VerifyDownload")
-	}
-	t.Logf("production updater download path verified staged %s update", runtime.GOOS)
 }
 
-func assertPathInsideDir(t *testing.T, dir, name string) {
-	t.Helper()
+// TestLiveForkListingParses proves the answer is a listing this build
+// understands, rather than an error page that happens to decline.
+func TestLiveForkListingParses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
 
-	dir, err := filepath.Abs(dir)
+	req, err := newForkRequest(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, err = filepath.Abs(name)
+	body, err := fetchForkListing(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	rel, err := filepath.Rel(dir, name)
+	releases, err := parseForkListing(body)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the update endpoint did not return a releases listing: %v", err)
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		t.Fatalf("staged update escaped update stage dir: %s", name)
+	if len(releases) == 0 {
+		t.Fatal("the update endpoint returned no releases at all")
 	}
+	t.Logf("newest release %q with %d assets", releases[0].TagName, len(releases[0].Assets))
 }
