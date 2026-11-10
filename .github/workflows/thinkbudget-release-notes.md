@@ -2,6 +2,24 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.16`** (was `v0.40.15`). llama.cpp moves from
+`b12111` to `b12177`, so the runtime archives are rebuilt; the ones from
+`0.40.15-thinkbudget` do not match this build. MLX stays at the same version,
+and the MLX archives are upstream's `v0.40.16` ones. Upstream adds preview
+support for Ripple models on the MLX runner and makes Qwen3.8 Flash Next use
+less memory there, and the OpenAI-compatible API now forwards the truncation
+option in Responses requests and returns an empty list from `/v1/models` when
+no models are installed.
+
+Ripple models run only on the MLX runner, so the thinking budget, which this
+build enforces in llama-server, does not apply to them, as for every other
+MLX model.
+
+Every carried patch applies to the new base with the same changes it made
+before, and none needed a merge by hand.
+
+## Also in this build, from 0.40.15-thinkbudget
+
 **Rebased onto Ollama `v0.40.15`** (was `v0.40.14`). llama.cpp moves from
 `b11963` to `b12111`, so the runtime archives are rebuilt; the ones from
 `0.40.14-thinkbudget` do not match this build. Upstream's Metal workaround
