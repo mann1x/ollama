@@ -50,6 +50,14 @@ func (p *RippleParser) ThinkingClose() []string {
 	return nil
 }
 
+// ToolCallTags reports the delimiters of this parser's tool calls, so a
+// response-wide thinking budget can forgive the thinking that led to a call.
+// The tags are ordinary text here, not special tokens; the runner only arms a
+// budget for this parser on an engine that matches tags on the decoded text.
+func (p *RippleParser) ToolCallTags() (string, string) {
+	return rippleToolOpen, rippleToolClose
+}
+
 func (p *RippleParser) PreservedTokens() []string {
 	return []string{rippleThinkOpen, rippleThinkClose, rippleToolOpen, rippleToolClose}
 }
