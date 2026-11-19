@@ -50,6 +50,30 @@ func ThinkingTagsForParser(p Parser) (start, end string) {
 	return tagger.ThinkingTags()
 }
 
+// ToolCallTagger is implemented by parsers that delimit tool calls with literal
+// tags. A runner spending a thinking budget across a whole response uses the
+// opening tag to tell circling apart from progress: thinking that led to a tool
+// call is work, and should not count against the thinking that follows it.
+type ToolCallTagger interface {
+	// ToolCallTags returns the opening and closing delimiters of a tool call,
+	// or empty strings when the parser has no such tags.
+	ToolCallTags() (start, end string)
+}
+
+// ToolCallStartTagForParser returns the tag a parser's tool calls open with, if
+// it exposes one.
+func ToolCallStartTagForParser(p Parser) string {
+	if p == nil || !p.HasToolSupport() {
+		return ""
+	}
+	tagger, ok := p.(ToolCallTagger)
+	if !ok {
+		return ""
+	}
+	start, _ := tagger.ToolCallTags()
+	return start
+}
+
 // ThinkingTagsAsText is implemented by a parser whose thinking tags are
 // ordinary text in its model's vocabulary rather than special tokens: each tag
 // is several tokens, and the token after it can merge with the tag's last
