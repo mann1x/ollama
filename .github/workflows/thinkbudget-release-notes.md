@@ -2,6 +2,43 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.17`** (was `v0.40.16`). llama.cpp moves from
+`b12177` to `b12257`, so the runtime archives are rebuilt; the ones from
+`0.40.16-thinkbudget` do not match this build. MLX and MLX-C move too, and the
+MLX archives are upstream's `v0.40.17` ones. Upstream adds Inkling 2 Mini on
+the MLX runner and lets the MLX runner generate for several requests at once.
+A request that turns thinking off on a model that cannot turn it off (gpt-oss)
+now gets that model's lowest level instead of an error. Changing the context
+shift setting between requests no longer reloads the model. Tool schemas keep
+keywords Ollama does not model (`default`, `minimum`, `format` and the like).
+On Windows, integrated GPUs keep weights out of pinned host memory, and Vulkan
+integrated GPUs load with mmap.
+
+A thinking budget is not a thinking level: turning thinking off still sets no
+budget, and the lowest level a model falls back to is passed to its template
+as a level, as before.
+
+**Ripple models name their thinking tags.** Ripple's `<think>` and `</think>`
+are ordinary text in its vocabulary, several tokens each, so a budget is armed
+on them only by an engine that matches tags on the decoded text and says so.
+Stock llama-server does not, so on it Ripple's thinking stays unbounded, as
+before; and Ripple runs only on the MLX runner at this release, which ignores
+the budget.
+
+Every carried patch applies to the new base with the same changes it made
+before. Three needed a merge by hand:
+
+- the thinking budget, where upstream added structured-output framing to the
+  same completion requests the budget's fields go into: both are passed;
+- the memory accounting, where upstream taught the parser one more buffer kind
+  (`h_nextn`, a draft model's buffer): it is counted, as upstream counts it;
+- reusing a runner across two tags that share a model file, where upstream now
+  reports why a loaded model must be reloaded: a tag that needs different
+  llama-server flags gives "llama-server flags changed".
+
+## Also in this build, from 0.40.16-thinkbudget
+
+
 **Rebased onto Ollama `v0.40.16`** (was `v0.40.15`). llama.cpp moves from
 `b12111` to `b12177`, so the runtime archives are rebuilt; the ones from
 `0.40.15-thinkbudget` do not match this build. MLX stays at the same version,
