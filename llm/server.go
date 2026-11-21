@@ -221,6 +221,31 @@ type CompletionRequest struct {
 	ThinkingClose []string
 	FormatFrames  *model.StructuredOutputFrames // MLX framed structured output, when the parser supplies it
 
+	// ThinkBudget caps the number of tokens the model may spend inside a
+	// thinking block. Zero leaves thinking unrestricted. Enforcing it requires
+	// the thinking delimiters below; runners without a reasoning-budget sampler
+	// ignore all three.
+	ThinkBudget        int
+	ThinkBudgetMessage string
+	ThinkingStartTag   string
+	ThinkingEndTag     string
+	// ThinkingTagsText says the two tags are ordinary text in the model's
+	// vocabulary (several tokens that merge with their neighbours), not
+	// special tokens. A runner arms the budget on such tags only when its
+	// engine matches tags on the decoded text; otherwise the budget is left
+	// off rather than reported and not held.
+	ThinkingTagsText bool
+
+	// ThinkBudgetResetTag is the tag a tool call opens with, when the model has
+	// a parser that names one. The budget is spent across the whole response
+	// rather than per thinking block -- a model that closes each block just
+	// short of its window and opens another is otherwise never cut -- and this
+	// tag is what separates a model circling from a model making progress: the
+	// thinking that produced a tool call is forgiven, and what follows starts
+	// from a full budget again. Empty leaves the budget cumulative with nothing
+	// to forgive it.
+	ThinkBudgetResetTag string
+
 	// Logprobs specifies whether to include log probabilities in the response
 	Logprobs bool
 
@@ -259,6 +284,9 @@ const (
 	DoneReasonStop DoneReason = iota
 	DoneReasonLength
 	DoneReasonConnectionClosed
+	// DoneReasonRepeat is reported when a generation was stopped because it
+	// had degenerated into repeating the same short sequence.
+	DoneReasonRepeat
 )
 
 func (d DoneReason) String() string {
@@ -267,6 +295,8 @@ func (d DoneReason) String() string {
 		return "length"
 	case DoneReasonStop:
 		return "stop"
+	case DoneReasonRepeat:
+		return "repeat"
 	default:
 		return ""
 	}

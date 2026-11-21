@@ -109,13 +109,7 @@ func getStagedUpdate() string {
 		slog.Debug("failed to lookup downloads", "error", err)
 		return ""
 	}
-	if len(files) == 0 {
-		return ""
-	} else if len(files) > 1 {
-		// Shouldn't happen
-		slog.Warn("multiple update downloads found, using first one", "bundles", files)
-	}
-	return files[0]
+	return consentedStagedUpdate(files)
 }
 
 func DoUpgrade(interactive bool) error {
