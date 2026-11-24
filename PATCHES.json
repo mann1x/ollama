@@ -10,7 +10,7 @@
     "A patch whose changes cannot exist on the upstream tag gets a stacked up- branch: its row carries depends_on and a base that is the dependency set rather than the tag, the branch is built on the merge of exactly those dependencies AT THEIR MANIFEST SHAS, it is listed after all of them, and it is fork-only. up-response-scope-think-budget is the first."
   ],
   "base": "v0.40.17",
-  "updated": "2026-11-21",
+  "updated": "2026-11-24",
   "integration": {
     "branch": "think-budget",
     "sha": "7c9e2df4",
@@ -601,6 +601,21 @@
       "title": "llama/compat: list every carried patch in the README",
       "status": "fork-only",
       "note": "Carries llama/compat/README.md = 56c6eaf4 (001, 004, 005, 006 in apply order), think-budget's README byte for byte, so check-compat-origin sees the whole list arrive from one fork commit. 2026-10-23: a306f873 merges up-completion-generation-prompt@d2d1694d on top of 3464ce0a (fast-forward; nothing moved), and the entry moved to the end of patches[], after that branch: xollama's v0.40.9 merges of assistant-shape and completion-generation-prompt had each combined the two sides' README entries, which the gate refuses (xo-35). CONSUMER RULE: at every README conflict before this branch, keep HEAD's README (ada2a209 after line-boundary); this branch's merge, last, takes its own side (56c6eaf4). Replayed from v0.40.9 (line-boundary, assistant-shape, completion-generation-prompt, this): every merge's README equals one of its parents', and the end is 56c6eaf4. Drop this row when any listed entry goes away. | PREVIOUS: Requested by xollama (#488): llama/compat/README.md = 3f1fcb62 (004's entry, then 005's) existed only as think-budget's resolution of the line-boundary/assistant-shape conflict, so check-compat-origin refused it and xollama kept ada2a209, which moved their compat digest off ours. After this branch the full apply order ends at README 3f1fcb62 and inputs digest 3023ebe12b5e, equal to think-budget. EXPECT ONE CONFLICT merging it: both dependencies are merge bases (criss-cross), so the virtual base already carries the README conflict, whatever the consumer resolved at assistant-shape. Resolution: take this branch's side; the result is byte-identical to this parent. up-response-scope-think-budget then merges clean. Drop this row when either dependency's README entry goes away."
+    },
+    {
+      "slug": "up-engine-sampling-defaults",
+      "branch": "up-engine-sampling-defaults",
+      "sha": "f53eb467",
+      "upstream_pr": null,
+      "rebased_onto": "v0.40.17",
+      "files": [
+        "api/types.go",
+        "api/types_test.go",
+        "docs/modelfile.mdx"
+      ],
+      "title": "api: default top_p and min_p to llama.cpp's (0.95, 0.05)",
+      "status": "fork-only",
+      "note": "2026-11-24. llm/llama_server.go sends every sampling field to the engine on each request, so api.DefaultOptions replaces llama-server's and opencoti's defaults whenever neither the model nor the request sets a field. Two differed from llama.cpp's common_params_sampling: top_p 0.9 (0.95) and min_p unset = 0 (0.05). Verified live on eleven2go 0.40.15-thinkbudget: qwen3:4b (no min_p in its params) ran at /slots min_p 0.0 through ollama, and the same llama-server answered a bare /completion at min_p 0.05. TestDefaultOptionsSamplingMatchesLlamaCpp pins the whole sampling set. Go-only: the llama inputs digest is unchanged, so a release can take its runtimes from v0.40.17-thinkbudget."
     }
   ],
   "known_conflicts": [
