@@ -2,6 +2,24 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.18`** (was `v0.40.17`). llama.cpp moves from
+`b12257` to `b12651`, so the runtime archives are rebuilt; the ones from
+`0.40.17-thinkbudget` and `0.40.17-1-thinkbudget` do not match this build.
+MLX and MLX-C stay at the same versions, and the MLX archives are upstream's
+`v0.40.18` ones. Upstream drops JetPack 5 builds for Jetson devices (JetPack 6
+is unchanged) and makes Inkling 2 faster on Apple silicon.
+
+Every carried patch applies to the new base with the same changes it made
+before. One needed a merge by hand: the MLX runner's fix for a model pulled for
+both runners adds tests to a file upstream now creates with tests of its own,
+and both sets are kept.
+
+**Sampling defaults match llama.cpp's** (new in `0.40.17-1-thinkbudget`).
+`top_p` defaults to 0.95 and `min_p` to 0.05, as in llama.cpp, instead of 0.9
+and 0. A model or request that sets them is unaffected.
+
+## Also in this build, from 0.40.17-thinkbudget
+
 **Rebased onto Ollama `v0.40.17`** (was `v0.40.16`). llama.cpp moves from
 `b12177` to `b12257`, so the runtime archives are rebuilt; the ones from
 `0.40.16-thinkbudget` do not match this build. MLX and MLX-C move too, and the
