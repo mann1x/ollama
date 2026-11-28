@@ -2,6 +2,19 @@ Test build of the thinking-budget work — **not** an official Ollama release, a
 
 ## New in this build
 
+**Rebased onto Ollama `v0.40.19`** (was `v0.40.18`). llama.cpp moves from
+`b12651` to `b12734`, so the runtime archives are rebuilt; the ones from
+`0.40.18-thinkbudget` do not match this build. MLX and MLX-C stay at the same
+versions, and the MLX archives are upstream's `v0.40.19` ones. Upstream makes
+Inkling 2 faster on Apple silicon for short conversations and with draft
+models, and stops the MLX runner holding on to memory it no longer needs while
+running experimental Qwen 4 models.
+
+Every carried patch applies to the new base with the same changes it made
+before, without a merge by hand.
+
+## Also in this build, from 0.40.18-thinkbudget
+
 **Rebased onto Ollama `v0.40.18`** (was `v0.40.17`). llama.cpp moves from
 `b12257` to `b12651`, so the runtime archives are rebuilt; the ones from
 `0.40.17-thinkbudget` and `0.40.17-1-thinkbudget` do not match this build.
