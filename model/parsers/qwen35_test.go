@@ -1,7 +1,10 @@
 package parsers
 
 import (
+	"slices"
+	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/ollama/ollama/api"
 )
@@ -511,5 +514,85 @@ func TestQwen35ParserThinkingTruncatedWithoutCloseTag(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Fatalf("expected no tool calls, got %d", len(calls))
+	}
+}
+
+func TestQwen35ToolCallTags(t *testing.T) {
+	p := &Qwen35Parser{}
+	start, end := p.ToolCallTags()
+	if start != "<tool_call>" || end != "</tool_call>" {
+		t.Fatalf("tool call tags = %q, %q", start, end)
+	}
+
+	// A response-wide thinking budget reads the opening tag through the generic
+	// helper, which must find it without knowing the parser's type. Until this
+	// parser named its tags the helper returned "", and the budget stayed
+	// cumulative across a whole agentic turn with nothing to forgive it.
+	if got := ToolCallStartTagForParser(p); got != "<tool_call>" {
+		t.Fatalf("ToolCallStartTagForParser = %q, want %q", got, "<tool_call>")
+	}
+}
+
+func TestQwen35ToolCallTagsArePreserved(t *testing.T) {
+	// The sampler matches the reset tag as a token sequence, so the tag has to
+	// survive detokenization intact rather than being split into text pieces.
+	// PreservedTokens is what keeps llama-server emitting it whole.
+	preserved := (&Qwen35Parser{}).PreservedTokens()
+	start, _ := (&Qwen35Parser{}).ToolCallTags()
+	if !slices.Contains(preserved, start) {
+		t.Fatalf("PreservedTokens = %q, missing the tool call open tag %q", preserved, start)
+	}
+}
+
+// ol-62 (xollama mail 1163): qwen3.5:2b ended a turn with done_reason=stop
+// inside a call it never closed. The tool parser held the 1,014 characters of
+// it and the end of the stream never reached it, so the response came back
+// with no content and no call. An unclosed call is returned as text: not run,
+// since it is unfinished, and not lost, so the client can say what went wrong.
+func TestQwen35ParserUnclosedToolCallAtEndIsReturnedAsContent(t *testing.T) {
+	tools := []api.Tool{{
+		Type: "function",
+		Function: api.ToolFunction{
+			Name: "write_file",
+			Parameters: api.ToolFunctionParameters{
+				Type: "object",
+				Properties: testPropsMap(map[string]api.ToolProperty{
+					"path":    {Type: api.PropertyType{"string"}},
+					"content": {Type: api.PropertyType{"string"}},
+				}),
+			},
+		},
+	}}
+	unclosed := "<tool_call>\n<function=write_file>\n<parameter=path>\nnotes/primes.py\n</parameter>\n<parameter=content>\ndef primes(n):\n"
+
+	for _, split := range []struct {
+		name   string
+		chunks []string
+	}{
+		{"ends on the last chunk", []string{unclosed[:40], unclosed[40:]}},
+		{"ends on an empty final chunk", []string{unclosed[:40], unclosed[40:], ""}},
+	} {
+		t.Run(split.name, func(t *testing.T) {
+			parser := ParserForName("qwen3.5")
+			parser.Init(tools, nil, &api.ThinkValue{Value: false})
+
+			var content strings.Builder
+			var calls []api.ToolCall
+			for i, chunk := range split.chunks {
+				c, _, cs, err := parser.Add(chunk, i == len(split.chunks)-1)
+				if err != nil {
+					t.Fatalf("parse failed: %v", err)
+				}
+				content.WriteString(c)
+				calls = append(calls, cs...)
+			}
+
+			if len(calls) != 0 {
+				t.Fatalf("an unclosed call must not run, got %d calls", len(calls))
+			}
+			if got := content.String(); got != strings.TrimRightFunc(unclosed, unicode.IsSpace) && got != unclosed {
+				t.Fatalf("expected the unclosed call back as content, got %q", got)
+			}
+		})
 	}
 }
